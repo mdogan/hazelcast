@@ -20,7 +20,6 @@ import com.hazelcast.config.Config;
 import com.hazelcast.logging.ILogger;
 import com.hazelcast.logging.Logger;
 import com.hazelcast.spi.properties.GroupProperty;
-import com.hazelcast.spi.properties.HazelcastProperties;
 import com.hazelcast.test.OverridePropertyRule;
 import com.hazelcast.test.annotation.ParallelTest;
 import com.hazelcast.test.annotation.QuickTest;
@@ -72,7 +71,6 @@ public class DefaultAddressPickerInterfacesTest {
 
     private final ILogger logger = Logger.getLogger(AddressPicker.class);
     private final Config config = new Config();
-    private final HazelcastProperties hazelcastProperties = new HazelcastProperties(config);
 
     @Rule
     public final OverridePropertyRule ruleSysPropPreferIpv4 = set(PREFER_IPV4_STACK, "true");
@@ -330,7 +328,7 @@ public class DefaultAddressPickerInterfacesTest {
      * or {@code null} if the result was {@code null}.
      */
     private InetAddress getInetAddressFromDefaultAddressPicker() throws Exception {
-        DefaultAddressPicker picker = new DefaultAddressPicker(config, hazelcastProperties, logger);
+        DefaultAddressPicker picker = new DefaultAddressPicker(config, logger);
         DefaultAddressPicker.AddressDefinition addressDefinition = picker.pickMatchingAddress(null);
         return addressDefinition == null ? null : addressDefinition.inetAddress;
     }

@@ -42,6 +42,7 @@ import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static com.hazelcast.internal.cluster.impl.ClusterStateManagerAccessor.setClusterState;
 import static com.hazelcast.internal.cluster.impl.ClusterStateManagerAccessor.setMissingMembers;
@@ -63,7 +64,7 @@ public class RedisNodeExtension extends DefaultNodeExtension {
         super(node);
 
         if (node.getProperties().getInteger(GroupProperty.PARTITION_COUNT) != SLOT_COUNT) {
-            throw new HazelcastException("invalid partition count!");
+            throw new HazelcastException("invalid partition counter!");
         }
 
         if (REDIS_PATH == null) {
@@ -210,19 +211,23 @@ public class RedisNodeExtension extends DefaultNodeExtension {
         }
 
         try {
-            parseRdb(new File(dir, DUMP_RDB));
+            AtomicInteger counter = parseRdb(new File(dir, DUMP_RDB));
+            while (counter.get() > 0) {
+                Thread.sleep(100);
+            }
         } catch (Exception e) {
             throw new HazelcastException(e);
         }
     }
 
-    private void parseRdb(File file) throws Exception {
+    private AtomicInteger parseRdb(File file) throws Exception {
         NodeEngineImpl nodeEngine = node.getNodeEngine();
         MapService mapService = nodeEngine.getService(MapService.SERVICE_NAME);
         final MapServiceContext mapServiceContext = mapService.getMapServiceContext();
         InternalOperationService operationService = nodeEngine.getOperationService();
         final InternalSerializationService serializationService = node.getSerializationService();
 
+        final AtomicInteger count = new AtomicInteger();
         RdbParser parser = new RdbParser(file);
         try {
             Entry e;
@@ -247,40 +252,63 @@ public class RedisNodeExtension extends DefaultNodeExtension {
                         final int crc16 = CRC16.getCRC16(kvp.getKey());
                         final int partitionId = CRC16.getSlot(crc16);
 
-                        operationService.execute(new PartitionSpecificRunnable() {
-                            @Override
-                            public int getPartitionId() {
-                                return partitionId;
-                            }
-
-                            @Override
-                            public void run() {
-                                PartitionContainer pc = mapServiceContext.getPartitionContainer(partitionId);
-                                RecordStore recordStore = pc.getRecordStore(RedisCommandHandler.REDIS_MAP_NAME, true);
-
-                                Storage storage = recordStore.getStorage();
-                                HeapData key = serializationService.toData(new String(kvp.getKey()));
-                                key.setPartitionHash(crc16);
-
-                                assert kvp.getValueType() == ValueType.VALUE : kvp.getValueType();
-                                HeapData value = serializationService.toData(new String(kvp.getValues().get(0)));
-
-                                Record record = recordStore.createRecord(key, value, -1, -1, Clock.currentTimeMillis());
-                                storage.put(key, record);
-
-                                logger.info("Loaded entry: " + new String(kvp.getKey()));
-                            }
-                        });
+                        operationService.execute(
+                                new RestoreMapEntryTask(partitionId, count, mapServiceContext, serializationService, kvp, crc16));
                         break;
                 }
             }
         } finally {
             parser.close();
         }
+        return count;
     }
 
     @Override
     public String createMemberUuid(Address address) {
         return uuid != null ? uuid : super.createMemberUuid(address);
+    }
+
+    private class RestoreMapEntryTask implements PartitionSpecificRunnable {
+        private final int partitionId;
+        private final AtomicInteger counter;
+        private final MapServiceContext mapServiceContext;
+        private final InternalSerializationService serializationService;
+        private final KeyValuePair kvp;
+        private final int crc16;
+
+        RestoreMapEntryTask(int partitionId, AtomicInteger counter, MapServiceContext mapServiceContext,
+                InternalSerializationService serializationService, KeyValuePair kvp, int crc16) {
+            this.partitionId = partitionId;
+            this.counter = counter;
+            this.mapServiceContext = mapServiceContext;
+            this.serializationService = serializationService;
+            this.kvp = kvp;
+            this.crc16 = crc16;
+            counter.incrementAndGet();
+        }
+
+        @Override
+        public void run() {
+            PartitionContainer pc = mapServiceContext.getPartitionContainer(partitionId);
+            RecordStore recordStore = pc.getRecordStore(RedisCommandHandler.REDIS_MAP_NAME, true);
+
+            Storage storage = recordStore.getStorage();
+            HeapData key = serializationService.toData(new String(kvp.getKey()));
+            key.setPartitionHash(crc16);
+
+            assert kvp.getValueType() == ValueType.VALUE : kvp.getValueType();
+            HeapData value = serializationService.toData(new String(kvp.getValues().get(0)));
+
+            Record record = recordStore.createRecord(key, value, -1, -1, Clock.currentTimeMillis());
+            storage.put(key, record);
+
+            logger.fine("Loaded entry: " + new String(kvp.getKey()));
+            counter.decrementAndGet();
+        }
+
+        @Override
+        public int getPartitionId() {
+            return partitionId;
+        }
     }
 }

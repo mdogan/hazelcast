@@ -79,6 +79,10 @@ public class HeapData implements Data {
         return hashCode();
     }
 
+    public void setPartitionHash(int hash) {
+        Bits.writeIntB(payload, PARTITION_HASH_OFFSET, hash);
+    }
+
     @Override
     public boolean hasPartitionHash() {
         return payload != null && payload.length >= HEAP_DATA_OVERHEAD && Bits.readIntB(payload, PARTITION_HASH_OFFSET) != 0;

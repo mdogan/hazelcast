@@ -268,7 +268,7 @@ public class RedisNodeExtension extends DefaultNodeExtension {
                                 Record record = recordStore.createRecord(key, value, -1, -1, Clock.currentTimeMillis());
                                 storage.put(key, record);
 
-                                logger.info("Load entry: " + new String(kvp.getKey()));
+                                logger.info("Loaded entry: " + new String(kvp.getKey()));
                             }
                         });
                         break;

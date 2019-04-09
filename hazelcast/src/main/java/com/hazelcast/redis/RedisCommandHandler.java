@@ -61,10 +61,10 @@ public class RedisCommandHandler implements Consumer<byte[][]>{
     }
 
     private void doSet(byte[][] args) {
-        HeapData key = toKeydata(args[1]);
+        HeapData key = toKeydata(new String(args[1]));
         int partitionId = CRC16.getSlot(key.getPartitionHash());
 
-        Data value = nodeEngine.toData(args[2]);
+        Data value = nodeEngine.toData(new String(args[2]));
 
         Operation op = getMapOperationProvider(REDIS_MAP_NAME).createSetOperation(REDIS_MAP_NAME, key, value, -1, -1);
         nodeEngine.getOperationService().invokeOnPartition(MapService.SERVICE_NAME, op, partitionId)
@@ -81,7 +81,7 @@ public class RedisCommandHandler implements Consumer<byte[][]>{
         });
     }
 
-    private HeapData toKeydata(byte[] arg) {
+    private HeapData toKeydata(String arg) {
         HeapData key = nodeEngine.getSerializationService().toData(arg);
         int crc16 = CRC16.getCRC16(arg);
         key.setPartitionHash(crc16);
@@ -89,7 +89,7 @@ public class RedisCommandHandler implements Consumer<byte[][]>{
     }
 
     private void doDel(byte[][] args) {
-        HeapData key = toKeydata(args[1]);
+        HeapData key = toKeydata(new String(args[1]));
         int partitionId = CRC16.getSlot(key.getPartitionHash());
 
         Operation op = getMapOperationProvider(REDIS_MAP_NAME).createRemoveOperation(REDIS_MAP_NAME, key, false);
@@ -112,10 +112,10 @@ public class RedisCommandHandler implements Consumer<byte[][]>{
     }
 
     private void doPut(byte[][] args) {
-        HeapData key = toKeydata(args[1]);
+        HeapData key = toKeydata(new String(args[1]));
         int partitionId = CRC16.getSlot(key.getPartitionHash());
 
-        Data value = nodeEngine.toData(args[2]);
+        Data value = nodeEngine.toData(new String(args[2]));
 
         Operation op = getMapOperationProvider(REDIS_MAP_NAME).createPutOperation(REDIS_MAP_NAME, key, value, -1, -1);
         nodeEngine.getOperationService().invokeOnPartition(MapService.SERVICE_NAME, op, partitionId)
@@ -123,8 +123,8 @@ public class RedisCommandHandler implements Consumer<byte[][]>{
             @Override
             public void onResponse(Object response) {
                 if (response != null) {
-                    byte[] str = nodeEngine.toObject(response);
-                    connection.write(RESPReply.string(new String(str)));
+                    String str = nodeEngine.toObject(response);
+                    connection.write(RESPReply.string(str));
                 } else {
                     connection.write(RESPReply.nil());
                 }
@@ -139,7 +139,7 @@ public class RedisCommandHandler implements Consumer<byte[][]>{
     }
 
     private void doGet(byte[][] args) {
-        HeapData key = toKeydata(args[1]);
+        HeapData key = toKeydata(new String(args[1]));
         int partitionId = CRC16.getSlot(key.getPartitionHash());
 
         Operation op = getMapOperationProvider(REDIS_MAP_NAME).createGetOperation(REDIS_MAP_NAME, key);
@@ -148,8 +148,8 @@ public class RedisCommandHandler implements Consumer<byte[][]>{
             @Override
             public void onResponse(Object response) {
                 if (response != null) {
-                    byte[] str = nodeEngine.toObject(response);
-                    connection.write(RESPReply.string(new String(str)));
+                    String str = nodeEngine.toObject(response);
+                    connection.write(RESPReply.string(str));
                 } else {
                     connection.write(RESPReply.nil());
                 }

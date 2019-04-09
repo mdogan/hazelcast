@@ -51,13 +51,6 @@ public final class CRC16 {
     throw new InstantiationError( "Must not instantiate this class" );
   }
 
-  public static int getSlot(String key) {
-    key = getHashTag(key);
-    // optimization with modulo operator with power of 2
-    // equivalent to getCRC16(key) % 16384
-    return getCRC16(key) & (16384 - 1);
-  }
-
   public static int getSlot(byte[] key) {
     int s = -1;
     int e = -1;
@@ -76,6 +69,10 @@ public final class CRC16 {
       return getCRC16(key, s + 1, e) & (16384 - 1);
     }
     return getCRC16(key) & (16384 - 1);
+  }
+
+  public static int getSlot(int crc) {
+    return crc & (16384 - 1);
   }
 
   public static String getHashTag(String key) {

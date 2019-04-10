@@ -11,10 +11,13 @@ import com.hazelcast.nio.serialization.Data;
 import com.hazelcast.spi.ExecutionService;
 import com.hazelcast.spi.NodeEngine;
 import com.hazelcast.spi.Operation;
+import com.hazelcast.spi.OperationFactory;
 import com.hazelcast.util.function.Consumer;
 
+import java.util.Map;
 import java.util.concurrent.Executor;
 
+import static com.hazelcast.map.impl.MapService.SERVICE_NAME;
 import static com.hazelcast.redis.RESPReply.error;
 
 public class RedisCommandHandler implements Consumer<byte[][]>{
@@ -46,14 +49,16 @@ public class RedisCommandHandler implements Consumer<byte[][]>{
         @Override
         public void run() {
             String cmd = new String(args[0]);
-            if (cmd.equals("SET")) { // map.set
+            if (cmd.equalsIgnoreCase("SET")) { // map.set
                 doSet(args);
-            } else if (cmd.equals("GETSET")) { // map.put
+            } else if (cmd.equalsIgnoreCase("GETSET")) { // map.put
                 doPut(args);
-            } else if (cmd.equals("GET")) { // map.get
+            } else if (cmd.equalsIgnoreCase("GET")) { // map.get
                 doGet(args);
-            } else if (cmd.equals("DEL")) {
-                doDel(args);
+            } else if (cmd.equalsIgnoreCase("DEL")) {
+                doRemove(args);
+            } else if (cmd.equalsIgnoreCase("DBSIZE")) {
+                doSize();
             } else {
                 connection.write(RESPReply.error("Not implemented!"));
             }
@@ -88,7 +93,7 @@ public class RedisCommandHandler implements Consumer<byte[][]>{
         return key;
     }
 
-    private void doDel(byte[][] args) {
+    private void doRemove(byte[][] args) {
         HeapData key = toKeydata(new String(args[1]));
         int partitionId = CRC16.getSlot(key.getPartitionHash());
 
@@ -109,6 +114,22 @@ public class RedisCommandHandler implements Consumer<byte[][]>{
                         connection.write(RESPReply.error(t.getMessage()));
                     }
                 });
+    }
+
+    private void doSize() {
+        OperationFactory sizeOperationFactory = getMapOperationProvider(REDIS_MAP_NAME).createMapSizeOperationFactory(REDIS_MAP_NAME);
+        Map<Integer, Object> results = null;
+        try {
+            results = nodeEngine.getOperationService().invokeOnAllPartitions(SERVICE_NAME, sizeOperationFactory);
+            int total = 0;
+            for (Object result : results.values()) {
+                Integer size = nodeEngine.getSerializationService().toObject(result);
+                total += size;
+            }
+            connection.write(RESPReply.integer(total));
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
     }
 
     private void doPut(byte[][] args) {

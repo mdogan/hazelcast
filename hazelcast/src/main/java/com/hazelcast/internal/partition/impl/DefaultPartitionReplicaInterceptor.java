@@ -38,7 +38,7 @@ final class DefaultPartitionReplicaInterceptor implements PartitionReplicaInterc
         }
 
         if (partitionService.isLocalMemberMaster()) {
-            partitionService.getPartitionStateManager().incrementVersion();
+//            partitionService.getPartitionStateManager().incrementVersion();
         }
     }
 }

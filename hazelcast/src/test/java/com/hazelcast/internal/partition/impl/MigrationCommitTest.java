@@ -579,7 +579,8 @@ public class MigrationCommitTest extends HazelcastTestSupport {
                 InternalPartitionServiceImpl partitionService
                         = (InternalPartitionServiceImpl) getPartitionService(instance);
                 PartitionStateManager partitionStateManager = partitionService.getPartitionStateManager();
-                partitionStateManager.incrementVersion();
+                // TODO: ?
+//                partitionStateManager.incrementVersion();
             } else {
                 System.err.println("COLLECT COMMIT START FAILED! curr: " + migrationInfoRef.get() + " new: " + migrationInfo);
             }

@@ -98,10 +98,10 @@ public class PartitionTableViewTest {
         PartitionReplica[][] members = createRandomMembers();
         InternalPartition[] partitions = new InternalPartition[members.length];
         for (int i = 0; i < partitions.length; i++) {
-            partitions[i] = new InternalPartitionImpl(i, null, members[i][0], members[i]);
+            partitions[i] = new InternalPartitionImpl(i, members[i][0], members[i], 1, null);
         }
 
-        PartitionTableView table = new PartitionTableView(partitions, 0);
+        PartitionTableView table = new PartitionTableView(partitions);
         assertEquals(partitions.length, table.getLength());
 
         for (int i = 0; i < members.length; i++) {

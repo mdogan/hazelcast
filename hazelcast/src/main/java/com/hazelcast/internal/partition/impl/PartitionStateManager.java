@@ -40,12 +40,11 @@ import com.hazelcast.spi.partitiongroup.MemberGroup;
 import java.util.Collection;
 import java.util.Set;
 import java.util.UUID;
-import java.util.concurrent.atomic.AtomicInteger;
 
 import static com.hazelcast.cluster.memberselector.MemberSelectors.DATA_MEMBER_SELECTOR;
 import static com.hazelcast.internal.metrics.MetricDescriptorConstants.PARTITIONS_METRIC_PARTITION_REPLICA_STATE_MANAGER_LOCAL_PARTITION_COUNT;
 import static com.hazelcast.internal.metrics.MetricDescriptorConstants.PARTITIONS_METRIC_PARTITION_REPLICA_STATE_MANAGER_MEMBER_GROUP_SIZE;
-import static com.hazelcast.internal.metrics.MetricDescriptorConstants.PARTITIONS_METRIC_PARTITION_REPLICA_STATE_MANAGER_VERSION;
+//import static com.hazelcast.internal.metrics.MetricDescriptorConstants.PARTITIONS_METRIC_PARTITION_REPLICA_STATE_MANAGER_VERSION;
 
 /**
  * Maintains the partition table state.
@@ -59,8 +58,8 @@ public class PartitionStateManager {
     private final int partitionCount;
     private final InternalPartitionImpl[] partitions;
 
-    @Probe(name = PARTITIONS_METRIC_PARTITION_REPLICA_STATE_MANAGER_VERSION)
-    private final AtomicInteger stateVersion = new AtomicInteger();
+//    @Probe(name = PARTITIONS_METRIC_PARTITION_REPLICA_STATE_MANAGER_VERSION)
+//    private final AtomicInteger stateVersion = new AtomicInteger();
 
     private final PartitionStateGenerator partitionStateGenerator;
     private final MemberGroupFactory memberGroupFactory;
@@ -84,7 +83,7 @@ public class PartitionStateManager {
         PartitionReplicaInterceptor interceptor = new DefaultPartitionReplicaInterceptor(partitionService);
         PartitionReplica localReplica = PartitionReplica.from(node.getLocalMember());
         for (int i = 0; i < partitionCount; i++) {
-            this.partitions[i] = new InternalPartitionImpl(i, interceptor, localReplica);
+            this.partitions[i] = new InternalPartitionImpl(i, localReplica, interceptor);
         }
 
         memberGroupFactory = MemberGroupFactoryFactory.newMemberGroupFactory(node.getConfig().getPartitionGroupConfig(),
@@ -149,11 +148,11 @@ public class PartitionStateManager {
 
         // increment state version to make fail cluster state transaction
         // if it's started and not locked the state yet.
-        stateVersion.incrementAndGet();
+//        stateVersion.incrementAndGet();
         ClusterState clusterState = node.getClusterService().getClusterState();
         if (!clusterState.isMigrationAllowed()) {
             // cluster state is either changed or locked, decrement version back and fail.
-            stateVersion.decrementAndGet();
+//            stateVersion.decrementAndGet();
             logger.warning("Partitions can't be assigned since cluster-state= " + clusterState);
             return false;
         }
@@ -215,7 +214,7 @@ public class PartitionStateManager {
             partition.reset(localReplica);
             partition.setInitialReplicas(replicas);
         }
-        stateVersion.set(partitionTable.getVersion());
+//        stateVersion.set(partitionTable.getVersion());
         if (foundReplica) {
             setInitialized();
         }
@@ -332,29 +331,35 @@ public class PartitionStateManager {
         return partitions[partitionId].isMigrating();
     }
 
-    /** Sets the replica members for the {@code partitionId}. */
-    void updateReplicas(int partitionId, PartitionReplica[] replicas) {
-        InternalPartitionImpl partition = partitions[partitionId];
-        partition.setReplicas(replicas);
-    }
-
     // called under partition service lock
-    void setVersion(int version) {
-        stateVersion.set(version);
-    }
+//    void setVersion(int version) {
+//        stateVersion.set(version);
+//    }
 
     public int getVersion() {
-        return stateVersion.get();
+        int version = 0;
+        for (InternalPartitionImpl partition : partitions) {
+            version += partition.getVersion();
+        }
+        return version;
     }
 
-    void incrementVersion(int delta) {
-        assert delta > 0 : "Delta: " + delta;
-        stateVersion.addAndGet(delta);
+    public int getPartitionVersion(int partitionId) {
+        return partitions[partitionId].getVersion();
     }
 
-    void incrementVersion() {
-        stateVersion.incrementAndGet();
+    public void incrementPartitionVersion(int partitionId, int delta) {
+        partitions[partitionId].incrementVersion(delta);
     }
+
+//    void incrementVersion(int delta) {
+//        assert delta > 0 : "Delta: " + delta;
+//        stateVersion.addAndGet(delta);
+//    }
+
+//    void incrementVersion() {
+//        stateVersion.incrementAndGet();
+//    }
 
     boolean setInitialized() {
         if (!initialized) {
@@ -371,7 +376,7 @@ public class PartitionStateManager {
 
     void reset() {
         initialized = false;
-        stateVersion.set(0);
+//        stateVersion.set(0);
         // local member uuid changes during ClusterService reset
         PartitionReplica localReplica = PartitionReplica.from(node.getLocalMember());
         for (InternalPartitionImpl partition : partitions) {
@@ -404,6 +409,6 @@ public class PartitionStateManager {
         if (!initialized) {
             return new PartitionTableView(new PartitionReplica[partitions.length][InternalPartition.MAX_REPLICA_COUNT], 0);
         }
-        return new PartitionTableView(partitions, stateVersion.get());
+        return new PartitionTableView(partitions);
     }
 }

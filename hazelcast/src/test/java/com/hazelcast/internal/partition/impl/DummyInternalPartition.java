@@ -23,6 +23,7 @@ import com.hazelcast.cluster.Address;
 public class DummyInternalPartition implements InternalPartition {
     private PartitionReplica[] replicas;
     private int partitionId;
+    private int version;
 
     public DummyInternalPartition(PartitionReplica[] replicas, int partitionId) {
         this.replicas = replicas;
@@ -80,6 +81,16 @@ public class DummyInternalPartition implements InternalPartition {
             return null;
         }
         return replicas[replicaIndex];
+    }
+
+    @Override
+    public int getVersion() {
+        return version;
+    }
+
+    @Override
+    public void incrementVersion(int delta) {
+        version += delta;
     }
 
     @Override

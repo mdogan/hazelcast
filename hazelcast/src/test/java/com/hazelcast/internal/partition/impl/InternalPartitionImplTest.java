@@ -58,7 +58,7 @@ public class InternalPartitionImplTest {
 
     @Before
     public void setup() {
-        partition = new InternalPartitionImpl(1, partitionListener, localReplica);
+        partition = new InternalPartitionImpl(1, localReplica, partitionListener);
     }
 
     @Test

@@ -98,4 +98,7 @@ public interface IPartition {
      * @return {@code true} if address is owner or backup, {@code false} otherwise
      */
     boolean isOwnerOrBackup(Address address);
+
+    // TODO
+    int getVersion();
 }

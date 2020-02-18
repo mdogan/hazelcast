@@ -19,7 +19,7 @@ package com.hazelcast.internal.partition;
 import com.hazelcast.core.HazelcastException;
 
 /**
- * Thrown when local partition-state version doesn't match the version
+ * Thrown when local partition version doesn't match the version
  * of master member while running a migration/replication operation.
  */
 public class PartitionStateVersionMismatchException extends HazelcastException {
@@ -29,7 +29,7 @@ public class PartitionStateVersionMismatchException extends HazelcastException {
     }
 
     public PartitionStateVersionMismatchException(int masterVersion, int localVersion) {
-        this("Local partition state version is not equal to master's version!"
+        this("Local partition version is not equal to master's version!"
                 + " Local: " + localVersion + ", Master: " + masterVersion);
     }
 }

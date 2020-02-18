@@ -60,8 +60,7 @@ public final class PartitionStateOperation extends AbstractPartitionOperation im
 
         ILogger logger = getLogger();
         if (logger.isFineEnabled()) {
-            String message = (success ? "Applied" : "Rejected")
-                    + " new partition state. Version: " + partitionState.getVersion() + ", caller: " + callerAddress;
+            String message = (success ? "Applied" : "Rejected") + " new partition state. Caller: " + callerAddress;
             logger.fine(message);
         }
     }

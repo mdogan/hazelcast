@@ -527,7 +527,7 @@ public class InternalPartitionServiceImpl implements InternalPartitionService,
         }
 
         if (logger.isFineEnabled()) {
-            logger.fine("Publishing partition state, version: " + partitionState.getVersion());
+            logger.fine("Publishing partition state, version: XYZ");
         }
 
         PartitionStateOperation op = new PartitionStateOperation(partitionState, false);
@@ -555,7 +555,7 @@ public class InternalPartitionServiceImpl implements InternalPartitionService,
         assert partitionState != null;
 
         if (logger.isFineEnabled()) {
-            logger.fine("Sending partition state, version: " + partitionState.getVersion() + ", to " + target);
+            logger.fine("Sending partition state, version: XYZ, to " + target);
         }
 
         OperationService operationService = nodeEngine.getOperationService();
@@ -620,8 +620,7 @@ public class InternalPartitionServiceImpl implements InternalPartitionService,
             return false;
         }
 
-        return applyNewPartitionTable(partitionState.getPartitionTable(), partitionState.getVersion(),
-                partitionState.getCompletedMigrations(), sender);
+        return applyNewPartitionTable(partitionState.getPartitions(), partitionState.getCompletedMigrations(), sender);
     }
 
     private boolean validateSenderIsMaster(Address sender, String messageType) {
@@ -651,16 +650,16 @@ public class InternalPartitionServiceImpl implements InternalPartitionService,
      * This method does not validate the sender. It is caller method's responsibility.
      * This method will acquire the partition service lock.
      *
-     * @param partitionTable the new partition table
-     * @param newVersion new partition state version
+     * @param partitions the new partition table
      * @param completedMigrations latest completed migrations
      * @param sender         the sender of the new partition state
      * @return {@code true} if the partition state version is higher than the current one and was applied or
      * if the partition state version is same as the current one
      */
-    private boolean applyNewPartitionTable(PartitionReplica[][] partitionTable,
-            int newVersion, Collection<MigrationInfo> completedMigrations, Address sender) {
+    private boolean applyNewPartitionTable(InternalPartition[] partitions, Collection<MigrationInfo> completedMigrations,
+            Address sender) {
         try {
+            // TODO: Think about lock timeout again...
             if (!lock.tryLock(PTABLE_SYNC_TIMEOUT_SECONDS, SECONDS)) {
                 return false;
             }
@@ -670,36 +669,21 @@ public class InternalPartitionServiceImpl implements InternalPartitionService,
         }
 
         try {
-            int currentVersion = partitionStateManager.getVersion();
-            if (newVersion < currentVersion) {
-                if (logger.isFineEnabled()) {
-                    logger.fine("Already applied partition state change. Local version: " + currentVersion
-                            + ", Master version: " + newVersion + " Master: " + sender);
-                }
-                return false;
-            } else if (newVersion == currentVersion) {
-                if (logger.isFineEnabled()) {
-                    logger.fine("Already applied partition state change. Version: " + currentVersion + ", Master: " + sender);
-                }
-                return true;
-            }
-
-            requestMemberListUpdateIfUnknownMembersFound(sender, partitionTable);
-            updatePartitionsAndFinalizeMigrations(partitionTable, newVersion, completedMigrations);
-            return true;
+            requestMemberListUpdateIfUnknownMembersFound(sender, partitions);
+            return updatePartitionsAndFinalizeMigrations(partitions, completedMigrations, sender);
         } finally {
             lock.unlock();
         }
     }
 
-    private void requestMemberListUpdateIfUnknownMembersFound(Address sender, PartitionReplica[][] partitionTable) {
+    private void requestMemberListUpdateIfUnknownMembersFound(Address sender, InternalPartition[] partitions) {
         ClusterServiceImpl clusterService = node.clusterService;
         ClusterState clusterState = clusterService.getClusterState();
         Set<PartitionReplica> unknownReplicas = new HashSet<>();
 
-        for (PartitionReplica[] replicas : partitionTable) {
+        for (InternalPartition partition : partitions) {
             for (int index = 0; index < InternalPartition.MAX_REPLICA_COUNT; index++) {
-                PartitionReplica replica = replicas[index];
+                PartitionReplica replica = partition.getReplica(index);
                 if (replica == null) {
                     continue;
                 }
@@ -737,19 +721,47 @@ public class InternalPartitionServiceImpl implements InternalPartitionService,
      * Updates all partitions and version, updates (adds and retains) the completed migrations and finalizes the active
      * migration if it is equal to any completed.
      *
-     * @see MigrationManager#scheduleActiveMigrationFinalization(MigrationInfo)
-     * @param partitionTable new partition table
-     * @param version partition state version
+     * @param partitions          new partition table
      * @param completedMigrations completed migrations
+     * @param sender              the sender of the new partition state
+     * @see MigrationManager#scheduleActiveMigrationFinalization(MigrationInfo)
+     * @return TODO
      */
-    private void updatePartitionsAndFinalizeMigrations(PartitionReplica[][] partitionTable,
-            int version, Collection<MigrationInfo> completedMigrations) {
-        for (int partitionId = 0; partitionId < partitionCount; partitionId++) {
-            PartitionReplica[] replicas = partitionTable[partitionId];
-            partitionStateManager.updateReplicas(partitionId, replicas);
-        }
+    private boolean updatePartitionsAndFinalizeMigrations(InternalPartition[] partitions,
+            Collection<MigrationInfo> completedMigrations, Address sender) {
 
-        partitionStateManager.setVersion(version);
+        boolean applied = false;
+        boolean accepted = false;
+
+        for (int partitionId = 0; partitionId < partitionCount; partitionId++) {
+            InternalPartition newPartition = partitions[partitionId];
+
+            InternalPartitionImpl currentPartition = partitionStateManager.getPartitionImpl(partitionId);
+            int currentVersion = currentPartition.getVersion();
+            int newVersion = newPartition.getVersion();
+
+            if (newVersion < currentVersion) {
+                if (logger.isFinestEnabled()) {
+                    logger.finest("Already applied partition state change. Local version: " + currentVersion
+                            + ", Master version: " + newVersion + " Master: " + sender);
+                }
+                continue;
+            } else if (newVersion == currentVersion) {
+                if (!currentPartition.equals(newPartition)) {
+                     throw new IllegalStateException("Partition updates are diverged! Local: " + currentPartition
+                             + ", Received: " + newPartition);
+                }
+                if (logger.isFinestEnabled()) {
+                    logger.finest("Already applied partition state change. Version: " + currentVersion + ", Master: " + sender);
+                }
+                accepted = true;
+                continue;
+            }
+
+            applied = true;
+            accepted = true;
+            currentPartition.copyReplicasAndVersion(newPartition);
+        }
 
         for (MigrationInfo migration : completedMigrations) {
             boolean added = migrationManager.addCompletedMigration(migration);
@@ -758,13 +770,18 @@ public class InternalPartitionServiceImpl implements InternalPartitionService,
             }
         }
         if (logger.isFineEnabled()) {
-            logger.fine("Applied partition state update with version: " + version);
+            if (applied) {
+                logger.fine("Applied partition state update: ?VERSION?");
+            } else {
+                logger.fine("Already applied partition state update: ?VERSION?");
+            }
         }
         migrationManager.retainCompletedMigrations(completedMigrations);
 
         if (!partitionStateManager.setInitialized()) {
             node.getNodeExtension().onPartitionStateChange();
         }
+        return accepted;
     }
 
     @SuppressWarnings({"checkstyle:cyclomaticcomplexity", "checkstyle:npathcomplexity"})
@@ -784,7 +801,9 @@ public class InternalPartitionServiceImpl implements InternalPartitionService,
 
             boolean appliedAllMigrations = true;
             for (MigrationInfo migration : migrations) {
-                int currentVersion = partitionStateManager.getVersion();
+                InternalPartitionImpl partition = partitionStateManager.getPartitionImpl(migration.getPartitionId());
+                int currentVersion = partition.getVersion();
+
                 if (migration.getFinalPartitionVersion() <= currentVersion) {
                     if (logger.isFinestEnabled()) {
                         logger.finest("Already applied migration commit. Local version: " + currentVersion
@@ -804,14 +823,14 @@ public class InternalPartitionServiceImpl implements InternalPartitionService,
                 boolean added = migrationManager.addCompletedMigration(migration);
                 assert added : "Migration: " + migration;
 
-                partitionStateManager.incrementVersion(migration.getPartitionVersionIncrement());
-
                 if (migration.getStatus() == MigrationStatus.SUCCESS) {
                     if (logger.isFineEnabled()) {
                         logger.fine("Applying completed migration " + migration);
                     }
-                    InternalPartitionImpl partition = partitionStateManager.getPartitionImpl(migration.getPartitionId());
                     applyMigration(partition, migration);
+                } else {
+                    // migration failed...
+                    partition.incrementVersion(migration.getPartitionVersionIncrement());
                 }
                 migrationManager.scheduleActiveMigrationFinalization(migration);
             }
@@ -1230,7 +1249,8 @@ public class InternalPartitionServiceImpl implements InternalPartitionService,
                 return false;
             }
 
-            int currentVersion = partitionStateManager.getVersion();
+            InternalPartitionImpl partition = partitionStateManager.getPartitionImpl(migration.getPartitionId());
+            int currentVersion = partition.getVersion();
             int initialVersion = migration.getInitialPartitionVersion();
             int finalVersion = migration.getFinalPartitionVersion();
 
@@ -1256,11 +1276,13 @@ public class InternalPartitionServiceImpl implements InternalPartitionService,
             assert migration.equals(activeMigration) : "Committed migration: " + migration
                     + ", Active migration: " + activeMigration;
 
-            InternalPartitionImpl partition = partitionStateManager.getPartitionImpl(migration.getPartitionId());
             boolean added = migrationManager.addCompletedMigration(migration);
             assert added : "Could not add completed migration on destination: " + migration;
+
             applyMigration(partition, migration);
-            partitionStateManager.setVersion(finalVersion);
+            assert partition.getVersion() == finalVersion : "Current: " + partition.getVersion() + ", Expected: " + finalVersion;
+
+//            partitionStateManager.setVersion(finalVersion);
             activeMigration.setStatus(migration.getStatus());
             migrationManager.finalizeMigration(migration);
             if (logger.isFineEnabled()) {
@@ -1287,9 +1309,9 @@ public class InternalPartitionServiceImpl implements InternalPartitionService,
 
         private final Address thisAddress = node.getThisAddress();
 
-        private int maxVersion;
+        private InternalPartition[] latestPartitions;
 
-        private PartitionRuntimeState newState;
+        private boolean initialized = partitionStateManager.isInitialized();
 
         public void run() {
             ClusterState clusterState = node.getClusterService().getClusterState();
@@ -1305,15 +1327,15 @@ public class InternalPartitionServiceImpl implements InternalPartitionService,
 
             syncWithPartitionThreads();
 
-            maxVersion = partitionStateManager.getVersion();
-            logger.info("Fetching most recent partition table! my version: " + maxVersion);
+            latestPartitions = partitionStateManager.getPartitionsCopy();
+            logger.info("Fetching partition tables from cluster to determine the most recent one...");
 
             Collection<MigrationInfo> allCompletedMigrations = new HashSet<>();
             Collection<MigrationInfo> allActiveMigrations = new HashSet<>();
 
             collectAndProcessResults(allCompletedMigrations, allActiveMigrations);
 
-            logger.info("Most recent partition table version: " + maxVersion);
+            logger.info("Most recent partition table is determined.");
 
             processNewState(allCompletedMigrations, allActiveMigrations);
             publishPartitionRuntimeState();
@@ -1344,10 +1366,22 @@ public class InternalPartitionServiceImpl implements InternalPartitionService,
                         continue;
                     }
 
-                    if (maxVersion < state.getVersion()) {
-                        newState = state;
-                        maxVersion = state.getVersion();
+                    for (InternalPartition partition : state.getPartitions()) {
+                        int partitionId = partition.getPartitionId();
+                        InternalPartition latestPartition = latestPartitions[partitionId];
+                        if (latestPartition.getVersion() < partition.getVersion()) {
+                            latestPartitions[partitionId] = partition;
+                            initialized = true;
+                        } else {
+                            if (latestPartition.getVersion() == partition.getVersion()) {
+                                if (!latestPartition.equals(partition)) {
+                                    logger.warning("Issue while determining latest partition... Latest: " + latestPartition
+                                        + ", Received: " + partition);
+                                }
+                            }
+                        }
                     }
+
                     allCompletedMigrations.addAll(state.getCompletedMigrations());
 
                     if (state.getActiveMigration() != null) {
@@ -1374,7 +1408,7 @@ public class InternalPartitionServiceImpl implements InternalPartitionService,
                 if (state == null) {
                     logger.fine("Received NULL partition state from " + member);
                 } else {
-                    logger.fine("Received partition state version: " + state.getVersion() + " from " + member);
+                    logger.fine("Received partition state version from " + member);
                 }
                 return state;
             } catch (InterruptedException e) {
@@ -1414,32 +1448,17 @@ public class InternalPartitionServiceImpl implements InternalPartitionService,
             lock.lock();
             try {
                 processMigrations(allCompletedMigrations, allActiveMigrations);
-                if (newState != null) {
-                    maxVersion = Math.max(maxVersion, getPartitionStateVersion());
+                if (initialized) {
                     for (MigrationInfo migration : allCompletedMigrations) {
-                        // Partition table version should be greater than or equal to
-                        // final partition version of the latest completed migration.
-                        maxVersion = Math.max(maxVersion, migration.getFinalPartitionVersion());
-                    }
-                    // Increment version once more to make it greater than the most recent version.
-                    maxVersion++;
-                    logger.info("Applying the most recent of partition state with new version: " + maxVersion);
-                    applyNewPartitionTable(newState.getPartitionTable(), maxVersion, allCompletedMigrations, thisAddress);
-                } else if (partitionStateManager.isInitialized()) {
-                    for (MigrationInfo migrationInfo : allCompletedMigrations) {
-                        if (migrationManager.addCompletedMigration(migrationInfo)) {
-                            // Increment partition table version due to completed migration.
-                            partitionStateManager.incrementVersion(migrationInfo.getPartitionVersionIncrement());
-                            if (logger.isFinestEnabled()) {
-                                logger.finest("Scheduling migration finalization after finding most recent partition table: "
-                                        + migrationInfo);
-                            }
-                            migrationManager.scheduleActiveMigrationFinalization(migrationInfo);
+                        InternalPartition partition = latestPartitions[migration.getPartitionId()];
+                        if (partition.getVersion() < migration.getFinalPartitionVersion()) {
+                            // Apply version increment of failed active migrations.
+                            assert migration.getStatus() == MigrationStatus.FAILED : "Invalid status: " + migration;
+                            partition.incrementVersion(migration.getPartitionVersionIncrement());
                         }
                     }
-                    // Increment version once more to make it greater than the most recent version.
-                    partitionStateManager.incrementVersion();
-                    node.getNodeExtension().onPartitionStateChange();
+                    logger.info("Applying the most recent of partition state...");
+                    applyNewPartitionTable(latestPartitions, allCompletedMigrations, thisAddress);
                 }
                 shouldFetchPartitionTables = false;
             } finally {

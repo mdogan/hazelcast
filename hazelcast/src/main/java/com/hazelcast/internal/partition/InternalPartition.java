@@ -62,4 +62,7 @@ public interface InternalPartition extends IPartition {
     static IntStream replicaIndices() {
         return IntStream.range(0, InternalPartition.MAX_REPLICA_COUNT);
     }
+
+    // TODO
+    void incrementVersion(int delta);
 }

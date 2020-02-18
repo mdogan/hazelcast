@@ -66,9 +66,9 @@ public class MigrationOperation extends BaseMigrationOperation implements Target
     public MigrationOperation() {
     }
 
-    public MigrationOperation(MigrationInfo migrationInfo, List<MigrationInfo> completedMigrations, int partitionStateVersion,
+    public MigrationOperation(MigrationInfo migrationInfo, List<MigrationInfo> completedMigrations,
             ReplicaFragmentMigrationState fragmentMigrationState, boolean firstFragment, boolean lastFragment) {
-        super(migrationInfo, completedMigrations, partitionStateVersion);
+        super(migrationInfo, completedMigrations);
         this.fragmentMigrationState = fragmentMigrationState;
         this.firstFragment = firstFragment;
         this.lastFragment = lastFragment;

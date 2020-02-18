@@ -63,7 +63,6 @@ import static java.util.Collections.emptySet;
 import static java.util.Collections.singleton;
 
 /**
- * Migration request operation used by Hazelcast version 3.9
  * Sent from the master node to the partition owner. It will perform the migration by preparing the migration operations and
  * sending them to the destination. A response with a value equal to {@link Boolean#TRUE} indicates a successful migration.
  * It runs on the migration source and transfers the partition with multiple shots.
@@ -78,8 +77,8 @@ public class MigrationRequestOperation extends BaseMigrationOperation {
     }
 
     public MigrationRequestOperation(MigrationInfo migrationInfo, List<MigrationInfo> completedMigrations,
-            int partitionStateVersion, boolean fragmentedMigrationEnabled) {
-        super(migrationInfo, completedMigrations, partitionStateVersion);
+            boolean fragmentedMigrationEnabled) {
+        super(migrationInfo, completedMigrations);
         this.fragmentedMigrationEnabled = fragmentedMigrationEnabled;
     }
 
@@ -135,8 +134,7 @@ public class MigrationRequestOperation extends BaseMigrationOperation {
     private void invokeMigrationOperation(ReplicaFragmentMigrationState migrationState, boolean firstFragment) {
         boolean lastFragment = !namespacesContext.hasNext();
         Operation operation = new MigrationOperation(migrationInfo,
-                firstFragment ? completedMigrations : Collections.emptyList(),
-                partitionStateVersion, migrationState, firstFragment, lastFragment);
+                firstFragment ? completedMigrations : Collections.emptyList(), migrationState, firstFragment, lastFragment);
 
         ILogger logger = getLogger();
         if (logger.isFinestEnabled()) {

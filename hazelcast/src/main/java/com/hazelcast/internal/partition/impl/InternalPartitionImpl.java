@@ -16,13 +16,15 @@
 
 package com.hazelcast.internal.partition.impl;
 
+import com.hazelcast.cluster.Address;
 import com.hazelcast.internal.partition.InternalPartition;
 import com.hazelcast.internal.partition.PartitionReplica;
 import com.hazelcast.internal.partition.PartitionReplicaInterceptor;
-import com.hazelcast.cluster.Address;
 import edu.umd.cs.findbugs.annotations.SuppressFBWarnings;
 
 import java.util.Arrays;
+
+import static java.util.Arrays.copyOf;
 
 public class InternalPartitionImpl implements InternalPartition {
 
@@ -33,21 +35,22 @@ public class InternalPartitionImpl implements InternalPartition {
     private volatile PartitionReplica[] replicas = new PartitionReplica[MAX_REPLICA_COUNT];
     private final int partitionId;
     private final PartitionReplicaInterceptor interceptor;
+    private volatile int version;
     private volatile PartitionReplica localReplica;
     private volatile boolean isMigrating;
 
-    InternalPartitionImpl(int partitionId, PartitionReplicaInterceptor interceptor, PartitionReplica localReplica) {
-        assert localReplica != null;
+    InternalPartitionImpl(int partitionId, PartitionReplica localReplica, PartitionReplicaInterceptor interceptor) {
         this.partitionId = partitionId;
-        this.interceptor = interceptor;
         this.localReplica = localReplica;
+        this.interceptor = interceptor;
     }
 
     @SuppressFBWarnings("EI_EXPOSE_REP")
-    public InternalPartitionImpl(int partitionId, PartitionReplicaInterceptor interceptor,
-            PartitionReplica localReplica, PartitionReplica[] replicas) {
-        this(partitionId, interceptor, localReplica);
+    public InternalPartitionImpl(int partitionId, PartitionReplica localReplica, PartitionReplica[] replicas, int version,
+            PartitionReplicaInterceptor interceptor) {
+        this(partitionId, localReplica, interceptor);
         this.replicas = replicas;
+        this.version = version;
     }
 
     @Override
@@ -81,7 +84,18 @@ public class InternalPartitionImpl implements InternalPartition {
 
     @Override
     public boolean isLocal() {
-        return localReplica.equals(getOwnerReplicaOrNull());
+        PartitionReplica local = localReplica;
+        return local != null && local.equals(getOwnerReplicaOrNull());
+    }
+
+    @Override
+    public int getVersion() {
+        return version;
+    }
+
+    @Override
+    public void incrementVersion(int delta) {
+        version += delta;
     }
 
     @Override
@@ -107,7 +121,7 @@ public class InternalPartitionImpl implements InternalPartition {
 
     /** Swaps the replicas for {@code index1} and {@code index2} and call the partition listeners */
     void swapReplicas(int index1, int index2) {
-        PartitionReplica[] newReplicas = Arrays.copyOf(replicas, MAX_REPLICA_COUNT);
+        PartitionReplica[] newReplicas = copyOf(replicas, MAX_REPLICA_COUNT);
 
         PartitionReplica a1 = newReplicas[index1];
         PartitionReplica a2 = newReplicas[index2];
@@ -115,14 +129,15 @@ public class InternalPartitionImpl implements InternalPartition {
         newReplicas[index2] = a1;
 
         replicas = newReplicas;
-        callInterceptor(index1, a1, a2);
-        callInterceptor(index2, a2, a1);
+        onReplicaChange(index1, a1, a2);
+        onReplicaChange(index2, a2, a1);
     }
 
     // Not doing a defensive copy of given Address[]
     // This method is called under InternalPartitionServiceImpl.lock,
     // so there's no need to guard `addresses` field or to use a CAS.
     void setInitialReplicas(PartitionReplica[] newReplicas) {
+        assert newReplicas == null || newReplicas.length == MAX_REPLICA_COUNT;
         PartitionReplica[] oldReplicas = replicas;
         for (int replicaIndex = 0; replicaIndex < MAX_REPLICA_COUNT; replicaIndex++) {
             if (oldReplicas[replicaIndex] != null) {
@@ -130,6 +145,20 @@ public class InternalPartitionImpl implements InternalPartition {
             }
         }
         replicas = newReplicas;
+        for (int i = 0; newReplicas != null && i < newReplicas.length; i++) {
+            if (newReplicas[i] != null) {
+                version++;
+            }
+        }
+    }
+
+    void copyReplicasAndVersion(InternalPartition partition) {
+        PartitionReplica[] newReplicas = new PartitionReplica[InternalPartition.MAX_REPLICA_COUNT];
+        for (int i = 0; i < newReplicas.length; i++) {
+            newReplicas[i] = partition.getReplica(i);
+        }
+        setReplicas(newReplicas);
+        version = partition.getVersion();
     }
 
     // Not doing a defensive copy of given Address[]
@@ -138,38 +167,40 @@ public class InternalPartitionImpl implements InternalPartition {
     void setReplicas(PartitionReplica[] newReplicas) {
         PartitionReplica[] oldReplicas = replicas;
         replicas = newReplicas;
-        callInterceptor(newReplicas, oldReplicas);
+        onReplicasChange(newReplicas, oldReplicas);
     }
 
     void setReplica(int replicaIndex, PartitionReplica newReplica) {
-        PartitionReplica[] newReplicas = Arrays.copyOf(replicas, MAX_REPLICA_COUNT);
+        PartitionReplica[] newReplicas = copyOf(replicas, MAX_REPLICA_COUNT);
         PartitionReplica oldReplica = newReplicas[replicaIndex];
         newReplicas[replicaIndex] = newReplica;
         replicas = newReplicas;
-        callInterceptor(replicaIndex, oldReplica, newReplica);
+        onReplicaChange(replicaIndex, oldReplica, newReplica);
     }
 
     /** Calls the partition replica change interceptor for all changed replicas. */
-    private void callInterceptor(PartitionReplica[] newReplicas, PartitionReplica[] oldReplicas) {
+    private void onReplicasChange(PartitionReplica[] newReplicas, PartitionReplica[] oldReplicas) {
         for (int replicaIndex = 0; replicaIndex < MAX_REPLICA_COUNT; replicaIndex++) {
             PartitionReplica oldReplicasId = oldReplicas[replicaIndex];
             PartitionReplica newReplicasId = newReplicas[replicaIndex];
-            callInterceptor(replicaIndex, oldReplicasId, newReplicasId);
+            onReplicaChange(replicaIndex, oldReplicasId, newReplicasId);
         }
     }
 
     /** Calls the partition replica change interceptor for the changed replica. */
-    private void callInterceptor(int replicaIndex, PartitionReplica oldReplica, PartitionReplica newReplica) {
-        if (interceptor == null) {
-            return;
-        }
+    private void onReplicaChange(int replicaIndex, PartitionReplica oldReplica, PartitionReplica newReplica) {
         boolean changed;
         if (oldReplica == null) {
             changed = newReplica != null;
         } else {
             changed = !oldReplica.equals(newReplica);
         }
-        if (changed) {
+        if (!changed) {
+            return;
+        }
+        // TODO: Is this under partition service lock or on partition thread?
+        version++;
+        if (interceptor != null) {
             interceptor.replicaChanged(partitionId, replicaIndex, oldReplica, newReplica);
         }
     }
@@ -179,7 +210,7 @@ public class InternalPartitionImpl implements InternalPartition {
     }
 
     InternalPartitionImpl copy(PartitionReplicaInterceptor interceptor) {
-        return new InternalPartitionImpl(partitionId, interceptor, localReplica, Arrays.copyOf(replicas, MAX_REPLICA_COUNT));
+        return new InternalPartitionImpl(partitionId, localReplica, copyOf(replicas, MAX_REPLICA_COUNT), version, interceptor);
     }
 
     PartitionReplica[] getReplicas() {
@@ -234,10 +265,10 @@ public class InternalPartitionImpl implements InternalPartition {
             }
 
             if (currentReplica.equals(oldReplica)) {
-                PartitionReplica[] newReplicas = Arrays.copyOf(replicas, MAX_REPLICA_COUNT);
+                PartitionReplica[] newReplicas = copyOf(replicas, MAX_REPLICA_COUNT);
                 newReplicas[i] = newReplica;
                 replicas = newReplicas;
-                callInterceptor(i, oldReplica, newReplica);
+                onReplicaChange(i, oldReplica, newReplica);
                 return i;
             }
         }
@@ -248,6 +279,7 @@ public class InternalPartitionImpl implements InternalPartition {
         assert localReplica != null;
         this.replicas = new PartitionReplica[MAX_REPLICA_COUNT];
         this.localReplica = localReplica;
+        version = 0;
         resetMigrating();
     }
 
@@ -264,5 +296,33 @@ public class InternalPartitionImpl implements InternalPartition {
         }
         sb.append("}");
         return sb.toString();
+    }
+
+    @Override
+    public boolean equals(Object o) {
+        if (this == o) {
+            return true;
+        }
+        if (o == null || getClass() != o.getClass()) {
+            return false;
+        }
+
+        InternalPartitionImpl that = (InternalPartitionImpl) o;
+
+        if (partitionId != that.partitionId) {
+            return false;
+        }
+        if (version != that.version) {
+            return false;
+        }
+        return Arrays.equals(replicas, that.replicas);
+    }
+
+    @Override
+    public int hashCode() {
+        int result = Arrays.hashCode(replicas);
+        result = 31 * result + partitionId;
+        result = 31 * result + version;
+        return result;
     }
 }

@@ -51,6 +51,7 @@ public class MigrationCommitOperation extends AbstractPartitionOperation impleme
     public MigrationCommitOperation(MigrationInfo migration, UUID expectedMemberUuid) {
         this.migration = migration;
         this.expectedMemberUuid = expectedMemberUuid;
+        setPartitionId(migration.getPartitionId());
     }
 
     @Override
@@ -75,6 +76,11 @@ public class MigrationCommitOperation extends AbstractPartitionOperation impleme
     @Override
     public String getServiceName() {
         return InternalPartitionService.SERVICE_NAME;
+    }
+
+    @Override
+    public final boolean validatesTarget() {
+        return false;
     }
 
     @Override

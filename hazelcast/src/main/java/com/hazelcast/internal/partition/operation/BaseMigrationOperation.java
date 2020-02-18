@@ -56,17 +56,15 @@ abstract class BaseMigrationOperation extends AbstractPartitionOperation
     protected MigrationInfo migrationInfo;
     protected boolean success;
     protected List<MigrationInfo> completedMigrations;
-    protected int partitionStateVersion;
 
     private transient boolean nodeStartCompleted;
 
     BaseMigrationOperation() {
     }
 
-    BaseMigrationOperation(MigrationInfo migrationInfo, List<MigrationInfo> completedMigrations, int partitionStateVersion) {
+    BaseMigrationOperation(MigrationInfo migrationInfo, List<MigrationInfo> completedMigrations) {
         this.migrationInfo = migrationInfo;
         this.completedMigrations = completedMigrations;
-        this.partitionStateVersion = partitionStateVersion;
         setPartitionId(migrationInfo.getPartitionId());
     }
 
@@ -87,7 +85,7 @@ abstract class BaseMigrationOperation extends AbstractPartitionOperation
             verifyMigrationParticipant();
             verifyClusterState();
             applyCompletedMigrations();
-            verifyPartitionStateVersion();
+            verifyPartitionVersion();
         } catch (Exception e) {
             onMigrationComplete();
             throw e;
@@ -110,7 +108,7 @@ abstract class BaseMigrationOperation extends AbstractPartitionOperation
         }
         InternalPartitionServiceImpl partitionService = getService();
         if (!partitionService.applyCompletedMigrations(completedMigrations, migrationInfo.getMaster())) {
-            throw new PartitionStateVersionMismatchException(partitionStateVersion, partitionService.getPartitionStateVersion());
+            throw new PartitionStateVersionMismatchException("Failed to apply completed migrations! Migration: " + migrationInfo);
         }
         if (partitionService.getMigrationManager().isFinalizingMigrationRegistered(migrationInfo.getPartitionId())) {
             // There's a pending migration finalization operation in the queue.
@@ -123,17 +121,18 @@ abstract class BaseMigrationOperation extends AbstractPartitionOperation
         }
     }
 
-    /** Verifies that the sent partition state version matches the local version or this node is master. */
-    private void verifyPartitionStateVersion() {
+    /** Verifies that the sent partition version matches the local version or this node is master. */
+    private void verifyPartitionVersion() {
         InternalPartitionService partitionService = getService();
-        int localPartitionStateVersion = partitionService.getPartitionStateVersion();
-        if (partitionStateVersion != localPartitionStateVersion) {
+        int localVersion = partitionService.getPartition(getPartitionId()).getVersion();
+        int expectedVersion = migrationInfo.getInitialPartitionVersion();
+        if (expectedVersion != localVersion) {
             if (getNodeEngine().getThisAddress().equals(migrationInfo.getMaster())) {
                 return;
             }
 
             // this is expected when cluster member list changes during migration
-            throw new PartitionStateVersionMismatchException(partitionStateVersion, localPartitionStateVersion);
+            throw new PartitionStateVersionMismatchException(expectedVersion, localVersion);
         }
     }
 
@@ -324,7 +323,6 @@ abstract class BaseMigrationOperation extends AbstractPartitionOperation
     protected void writeInternal(ObjectDataOutput out) throws IOException {
         super.writeInternal(out);
         out.writeObject(migrationInfo);
-        out.writeInt(partitionStateVersion);
         writeList(completedMigrations, out);
     }
 
@@ -332,7 +330,6 @@ abstract class BaseMigrationOperation extends AbstractPartitionOperation
     protected void readInternal(ObjectDataInput in) throws IOException {
         super.readInternal(in);
         migrationInfo = in.readObject();
-        partitionStateVersion = in.readInt();
         completedMigrations = readList(in);
     }
 

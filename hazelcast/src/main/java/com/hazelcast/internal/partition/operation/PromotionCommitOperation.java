@@ -148,14 +148,14 @@ public class PromotionCommitOperation extends AbstractPartitionOperation impleme
         }
 
         ILogger logger = getLogger();
-        int partitionStateVersion = partitionService.getPartitionStateVersion();
-        if (partitionState.getVersion() <= partitionStateVersion) {
-            logger.warning("Already applied promotions to the partition state. Promotion state version: "
-                    + partitionState.getVersion() + ", current version: " + partitionStateVersion);
-            partitionService.getMigrationManager().releasePromotionPermit();
-            success = true;
-            return CallStatus.RESPONSE;
-        }
+//        int partitionStateVersion = partitionService.getPartitionStateVersion();
+//        if (partitionState.getVersion() <= partitionStateVersion) {
+//            logger.warning("Already applied promotions to the partition state. Promotion state version: "
+//                    + partitionState.getVersion() + ", current version: " + partitionStateVersion);
+//            partitionService.getMigrationManager().releasePromotionPermit();
+//            success = true;
+//            return CallStatus.RESPONSE;
+//        }
 
         migrationState = new MigrationStateImpl(Clock.currentTimeMillis(), promotions.size(), 0, 0L);
         partitionService.getMigrationInterceptor().onPromotionStart(MigrationParticipant.DESTINATION, promotions);
@@ -163,8 +163,9 @@ public class PromotionCommitOperation extends AbstractPartitionOperation impleme
 
         if (logger.isFineEnabled()) {
             logger.fine("Submitting BeforePromotionOperations for " + promotions.size() + " promotions. "
-                    + "Promotion partition state version: " + partitionState.getVersion()
-                    + ", current partition state version: " + partitionStateVersion);
+//                    + "Promotion partition state version: " + partitionState.getVersion()
+//                    + ", current partition state version: " + partitionStateVersion
+            );
         }
 
         PromotionOperationCallback beforePromotionsCallback = new BeforePromotionOperationCallback(this, promotions.size());
@@ -192,13 +193,15 @@ public class PromotionCommitOperation extends AbstractPartitionOperation impleme
         ILogger logger = getLogger();
         if (!success) {
             logger.severe("Promotion of " + promotions.size() + " partitions failed. "
-                    + ". Promotion partition state version: " + partitionState.getVersion()
-                    + ", current partition state version: " + partitionService.getPartitionStateVersion());
+//                    + ". Promotion partition state version: " + partitionState.getVersion()
+//                    + ", current partition state version: " + partitionService.getPartitionStateVersion()
+            );
         }
         if (logger.isFineEnabled()) {
             logger.fine("Submitting FinalizePromotionOperations for " + promotions.size() + " promotions. Result: " + success
-                    + ". Promotion partition state version: " + partitionState.getVersion()
-                    + ", current partition state version: " + partitionService.getPartitionStateVersion());
+//                    + ". Promotion partition state version: " + partitionState.getVersion()
+//                    + ", current partition state version: " + partitionService.getPartitionStateVersion()
+            );
         }
 
         PromotionOperationCallback finalizePromotionsCallback = new FinalizePromotionOperationCallback(this, promotions.size());

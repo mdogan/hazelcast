@@ -39,17 +39,19 @@ public class PartitionTableView {
         this.version = version;
     }
 
-    public PartitionTableView(InternalPartition[] partitions, int version) {
+    public PartitionTableView(InternalPartition[] partitions) {
         PartitionReplica[][] a = new PartitionReplica[partitions.length][MAX_REPLICA_COUNT];
+        int v = 0;
         for (InternalPartition partition : partitions) {
             int partitionId = partition.getPartitionId();
             for (int replica = 0; replica < MAX_REPLICA_COUNT; replica++) {
                 a[partitionId][replica] = partition.getReplica(replica);
             }
+            v += partition.getVersion();
         }
 
         this.replicas = a;
-        this.version = version;
+        this.version = v;
     }
 
     public int getVersion() {

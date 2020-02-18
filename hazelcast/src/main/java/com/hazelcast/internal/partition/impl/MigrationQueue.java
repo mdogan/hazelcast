@@ -18,68 +18,38 @@ package com.hazelcast.internal.partition.impl;
 
 import edu.umd.cs.findbugs.annotations.SuppressFBWarnings;
 
-import java.util.ArrayList;
-import java.util.List;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicInteger;
 
 /**
- * Manages migration tasks and migration status flag for {@link InternalPartitionServiceImpl} safely.
- * Once a migration task is added to the queue, queue has to be notified
- * via {@link MigrationQueue#afterTaskCompletion(MigrationRunnable)} after its execution.
+ * Manages migration tasks.
  */
 class MigrationQueue {
-
-    private final AtomicInteger migrateTaskCount = new AtomicInteger();
 
     private final BlockingQueue<MigrationRunnable> queue = new LinkedBlockingQueue<>();
 
     @SuppressFBWarnings(value = "RV_RETURN_VALUE_IGNORED",
             justification = "offer will always be successful since queue is unbounded")
     public void add(MigrationRunnable task) {
-        migrateTaskCount.incrementAndGet();
         queue.offer(task);
     }
 
-    public MigrationRunnable poll(int timeout, TimeUnit unit)
-            throws InterruptedException {
+    public MigrationRunnable poll(int timeout, TimeUnit unit) throws InterruptedException {
         return queue.poll(timeout, unit);
     }
 
     public void clear() {
-        List<MigrationRunnable> sink = new ArrayList<>();
-        queue.drainTo(sink);
-
-        for (MigrationRunnable task : sink) {
-            afterTaskCompletion(task);
-        }
+        queue.clear();
     }
 
-    /**
-     * Marks a task as completed.
-     *
-     * @throws IllegalStateException if the migration task count was reduced below 0
-     */
-    public void afterTaskCompletion(MigrationRunnable task) {
-        if (migrateTaskCount.decrementAndGet() < 0) {
-            throw new IllegalStateException();
-        }
-    }
-
-    public int migrationTaskCount() {
-        return migrateTaskCount.get();
-    }
-
-    public boolean hasMigrationTasks() {
-        return migrateTaskCount.get() > 0;
+    public int size() {
+        return queue.size();
     }
 
     @Override
     public String toString() {
-        return "MigrationQueue{" + "migrateTaskCount=" + migrateTaskCount
-                + ", queue=" + queue + '}';
+        return "MigrationQueue{" + queue + '}';
     }
 
 }

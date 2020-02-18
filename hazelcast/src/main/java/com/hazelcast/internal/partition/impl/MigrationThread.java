@@ -17,7 +17,7 @@
 package com.hazelcast.internal.partition.impl;
 
 import com.hazelcast.instance.impl.OutOfMemoryErrorDispatcher;
-import com.hazelcast.internal.partition.impl.MigrationManager.MigrateTask;
+import com.hazelcast.internal.partition.impl.MigrationManager.MigrationPlanTask;
 import com.hazelcast.logging.ILogger;
 import com.hazelcast.spi.properties.ClusterProperty;
 
@@ -38,10 +38,6 @@ class MigrationThread extends Thread implements Runnable {
     private final MigrationQueue queue;
     private final ILogger logger;
     /**
-     * Time in milliseconds to sleep after {@link MigrateTask}
-     */
-    private final long partitionMigrationInterval;
-    /**
      * Time in milliseconds to sleep when the migration queue is empty or migrations are not allowed
      */
     private final long sleepTime;
@@ -55,7 +51,7 @@ class MigrationThread extends Thread implements Runnable {
 
         this.migrationManager = migrationManager;
         this.queue = queue;
-        partitionMigrationInterval = migrationManager.partitionMigrationInterval;
+        long partitionMigrationInterval = migrationManager.partitionMigrationInterval;
         sleepTime = max(DEFAULT_MIGRATION_SLEEP_INTERVAL, partitionMigrationInterval);
         this.logger = logger;
     }
@@ -84,7 +80,6 @@ class MigrationThread extends Thread implements Runnable {
      * @throws InterruptedException if the sleep was interrupted
      */
     private void doRun() throws InterruptedException {
-        boolean migrating = false;
         for (; ; ) {
             if (!migrationManager.areMigrationTasksAllowed()) {
                 break;
@@ -94,28 +89,17 @@ class MigrationThread extends Thread implements Runnable {
                 break;
             }
 
-            migrating |= runnable instanceof MigrationManager.MigrateTask;
             processTask(runnable);
-            if (migrating && partitionMigrationInterval > 0) {
-                Thread.sleep(partitionMigrationInterval);
-            }
         }
-        boolean hasNoTasks = !queue.hasMigrationTasks();
-        if (hasNoTasks) {
-            if (migrating) {
-                logger.info("All migration tasks have been completed. ("
-                        + migrationManager.getStats().formatToString(logger.isFineEnabled()) + ")");
-            }
-            Thread.sleep(sleepTime);
-        } else if (!migrationManager.areMigrationTasksAllowed()) {
+        if (queue.size() == 0 || !migrationManager.areMigrationTasksAllowed()) {
             Thread.sleep(sleepTime);
         }
     }
 
-    private boolean processTask(MigrationRunnable runnable) {
+    private void processTask(MigrationRunnable runnable) {
         try {
-            if (runnable == null || !running) {
-                return false;
+            if (!running) {
+                return;
             }
 
             activeTask = runnable;
@@ -123,15 +107,15 @@ class MigrationThread extends Thread implements Runnable {
         } catch (Throwable t) {
             logger.warning(t);
         } finally {
-            queue.afterTaskCompletion(runnable);
             activeTask = null;
         }
-
-        return true;
     }
 
-    MigrationRunnable getActiveTask() {
-        return activeTask;
+    void abortMigrationTask() {
+        MigrationRunnable task = activeTask;
+        if (task instanceof MigrationPlanTask) {
+            ((MigrationPlanTask) task).abort();
+        }
     }
 
     /**
@@ -157,5 +141,4 @@ class MigrationThread extends Thread implements Runnable {
             currentThread().interrupt();
         }
     }
-
 }

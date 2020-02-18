@@ -67,6 +67,7 @@ import java.util.Collection;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.Iterator;
 import java.util.LinkedHashSet;
 import java.util.LinkedList;
 import java.util.List;
@@ -125,7 +126,11 @@ public class MigrationManager {
     private final boolean fragmentedMigrationEnabled;
     private final long memberHeartbeatTimeoutMillis;
     private boolean triggerRepartitioningWhenClusterStateAllowsMigration;
+
+    // TODO: This might not be needed anymore
     private final Set<MigrationInfo> finalizingMigrationsRegistry = Collections.newSetFromMap(new ConcurrentHashMap<>());
+
+    private final AtomicInteger migrationCount = new AtomicInteger();
 
     MigrationManager(Node node, InternalPartitionServiceImpl service, Lock partitionServiceLock) {
         this.node = node;
@@ -257,6 +262,7 @@ public class MigrationManager {
         return finalizingMigrationsRegistry.remove(migration);
     }
 
+    // TODO: This might not be needed anymore
     public boolean isFinalizingMigrationRegistered(int partitionId) {
         return finalizingMigrationsRegistry.stream().anyMatch(m -> partitionId == m.getPartitionId());
     }
@@ -498,6 +504,7 @@ public class MigrationManager {
     /** Clears the migration queue and triggers the control task. Called on the master node. */
     void triggerControlTask() {
         migrationQueue.clear();
+        migrationThread.abortMigrationTask();
         if (stats.getRemainingMigrations() > 0) {
             // triggered control task before current migrations are completed
             migrationQueue.add(new PublishCompletedMigrationsTask());
@@ -572,15 +579,21 @@ public class MigrationManager {
     }
 
     boolean hasOnGoingMigration() {
-        return activeMigrationInfo != null || migrationQueue.hasMigrationTasks();
+        return activeMigrationInfo != null || hasMigrationTasks();
+    }
+
+    private boolean hasMigrationTasks() {
+        return migrationCount.get() > 0 || migrationQueue.size() > 0;
     }
 
     int getMigrationQueueSize() {
-        return migrationQueue.migrationTaskCount();
+        int migrations = migrationCount.get();
+        return migrations > 0 ? migrations : migrationQueue.size();
     }
 
     void reset() {
         migrationQueue.clear();
+        migrationCount.set(0);
         activeMigrationInfo = null;
         completedMigrations.clear();
         shutdownRequestedMembers.clear();
@@ -843,25 +856,29 @@ public class MigrationManager {
             if (migrationCount > 0) {
                 scheduleMigrations(migrations);
                 // Schedule a task to publish completed migrations after all migrations tasks are completed.
-                migrationQueue.add(new PublishCompletedMigrationsTask());
+                schedule(new PublishCompletedMigrationsTask());
             }
             logMigrationStatistics(migrationCount);
         }
 
-        /** Schedules all migrations. */
         private void scheduleMigrations(List<Queue<MigrationInfo>> migrations) {
-            boolean migrationScheduled;
-            do {
-                migrationScheduled = false;
-                for (Queue<MigrationInfo> queue : migrations) {
-                    MigrationInfo migration = queue.poll();
-                    if (migration != null) {
-                        migrationScheduled = true;
-                        scheduleMigration(migration);
-                    }
-                }
-            } while (migrationScheduled);
+            schedule(new MigrationPlanTask(migrations));
         }
+
+        /** Schedules all migrations. */
+//        private void scheduleMigrations(List<Queue<MigrationInfo>> migrations) {
+//            boolean migrationScheduled;
+//            do {
+//                migrationScheduled = false;
+//                for (Queue<MigrationInfo> queue : migrations) {
+//                    MigrationInfo migration = queue.poll();
+//                    if (migration != null) {
+//                        migrationScheduled = true;
+//                        scheduleMigration(migration);
+//                    }
+//                }
+//            } while (migrationScheduled);
+//        }
 
         private void logMigrationStatistics(int migrationCount) {
             if (migrationCount > 0) {
@@ -886,8 +903,7 @@ public class MigrationManager {
          */
         private boolean migrationsTasksAllowed() {
             boolean migrationTasksAllowed = areMigrationTasksAllowed();
-            boolean hasMigrationTasks = migrationQueue.migrationTaskCount() > 1;
-            if (migrationTasksAllowed && !hasMigrationTasks) {
+            if (migrationTasksAllowed && !hasMigrationTasks()) {
                 return true;
             }
             triggerControlTask();
@@ -949,11 +965,63 @@ public class MigrationManager {
 
     }
 
+    class MigrationPlanTask implements MigrationRunnable {
+        private final List<Queue<MigrationInfo>> migrations;
+        private volatile boolean abort;
+
+        public MigrationPlanTask(List<Queue<MigrationInfo>> migrations) {
+            this.migrations = migrations;
+        }
+
+        @Override
+        public void run() {
+            migrationCount.set(migrations.stream().mapToInt(Collection::size).sum());
+
+            while (!migrations.isEmpty()) {
+                Iterator<Queue<MigrationInfo>> iter = migrations.iterator();
+                while (iter.hasNext()) {
+                    Queue<MigrationInfo> q = iter.next();
+                    if (q.isEmpty()) {
+                        iter.remove();
+                        continue;
+                    }
+
+                    MigrationInfo migration = q.poll();
+                    migrationCount.decrementAndGet();
+
+                    boolean success = new MigrateTask(migration).call();
+
+                    if (!success || abort) {
+                        logger.warning("Ignoring remaining migrations. Will recalculate the new migration plan. ("
+                                + stats.formatToString(logger.isFineEnabled()) + ")");
+                        migrationCount.set(0);
+                        return;
+                    }
+
+                    if (partitionMigrationInterval > 0) {
+                        try {
+                            Thread.sleep(partitionMigrationInterval);
+                        } catch (InterruptedException e) {
+                            logger.info("MigrationProcessTask is interrupted! Ignoring remaining migrations...");
+                            migrationCount.set(0);
+                            return;
+                        }
+                    }
+                }
+            }
+            logger.info("All migration tasks have been completed. (" + stats.formatToString(logger.isFineEnabled()) + ")");
+        }
+
+        void abort() {
+            abort = true;
+        }
+    }
+
     /**
-     * Invoked on the master node to migrate a partition (not including promotions). It will execute the
-     * {@link MigrationRequestOperation} on the partition owner.
+     * Invoked on the master node to migrate a partition (excluding promotions).
+     * It will execute the {@link MigrationRequestOperation} on the partition owner.
      */
-    class MigrateTask implements MigrationRunnable {
+    private class MigrateTask implements MigrationRunnable {
         private final MigrationInfo migration;
 
         MigrateTask(MigrationInfo migration) {
@@ -963,8 +1031,12 @@ public class MigrationManager {
 
         @Override
         public void run() {
+            call();
+        }
+
+        boolean call() {
             if (!partitionService.isLocalMemberMaster()) {
-                return;
+                return false;
             }
             if (migration.getSource() == null
                     && migration.getDestinationCurrentReplicaIndex() > 0
@@ -976,12 +1048,13 @@ public class MigrationManager {
 
             Member partitionOwner = checkMigrationParticipantsAndGetPartitionOwner();
             if (partitionOwner == null) {
-                return;
+                return true;
             }
+            Boolean result = Boolean.FALSE;
             long start = System.nanoTime();
             try {
                 beforeMigration();
-                Boolean result = executeMigrateOperation(partitionOwner);
+                result = executeMigrateOperation(partitionOwner);
                 processMigrationResult(partitionOwner, result);
             } catch (Throwable t) {
                 final Level level = migration.isValid() ? Level.WARNING : Level.FINE;
@@ -994,6 +1067,7 @@ public class MigrationManager {
                 partitionEventManager.sendMigrationEvent(stats.toMigrationState(), migration,
                         TimeUnit.NANOSECONDS.toMillis(elapsed));
             }
+            return result;
         }
 
         /** Sends a migration event to the event listeners. */
@@ -1555,6 +1629,11 @@ public class MigrationManager {
      * Task to publish completed migrations to cluster members after all migration tasks are consumed.
      */
     private class PublishCompletedMigrationsTask implements MigrationRunnable {
+
+        public PublishCompletedMigrationsTask() {
+            System.err.println("getStats() = " + getStats());
+        }
+
         @Override
         public void run() {
             partitionService.getPartitionEventManager().sendMigrationProcessCompletedEvent(stats.toMigrationState());

@@ -431,8 +431,8 @@ public class InternalPartitionServiceImpl implements InternalPartitionService,
             List<MigrationInfo> completedMigrations = migrationManager.getCompletedMigrationsCopy();
             InternalPartition[] partitions = partitionStateManager.getPartitions();
 
-            PartitionRuntimeState state = new PartitionRuntimeState(partitions, completedMigrations, getPartitionStateVersion());
-            state.setActiveMigration(migrationManager.getActiveMigration());
+            PartitionRuntimeState state = new PartitionRuntimeState(partitions, completedMigrations);
+            state.setActiveMigrations(migrationManager.getActiveMigrations());
             return state;
         } finally {
             lock.unlock();
@@ -461,8 +461,7 @@ public class InternalPartitionServiceImpl implements InternalPartitionService,
             migrationInfo.setStatus(MigrationStatus.SUCCESS);
             completedMigrations.add(migrationInfo);
 
-            int committedVersion = getPartitionStateVersion() + 1;
-            return new PartitionRuntimeState(partitions, completedMigrations, committedVersion);
+            return new PartitionRuntimeState(partitions, completedMigrations);
         } finally {
             lock.unlock();
         }
@@ -493,9 +492,7 @@ public class InternalPartitionServiceImpl implements InternalPartitionService,
                 migrationInfo.setStatus(MigrationStatus.SUCCESS);
             }
 
-            // each promotion increments version by 2
-            int committedVersion = getPartitionStateVersion() + migrationInfos.size() * 2;
-            return new PartitionRuntimeState(partitions, completedMigrations, committedVersion);
+            return new PartitionRuntimeState(partitions, completedMigrations);
         } finally {
             lock.unlock();
         }
@@ -506,6 +503,7 @@ public class InternalPartitionServiceImpl implements InternalPartitionService,
      * state if the partitions have not yet been initialized, there is ongoing repartitioning or a node is joining the cluster.
      */
     @SuppressWarnings("checkstyle:npathcomplexity")
+    // TODO: rethink this method... send just relevant partitions when needed?
     void publishPartitionRuntimeState() {
         if (!partitionStateManager.isInitialized()) {
             // do not send partition state until initialized!
@@ -544,6 +542,7 @@ public class InternalPartitionServiceImpl implements InternalPartitionService,
         }
     }
 
+    // TODO: rethink this method... send just relevant partitions when needed?
     void sendPartitionRuntimeState(Address target) {
         if (!isLocalMemberMaster()) {
             return;
@@ -563,6 +562,7 @@ public class InternalPartitionServiceImpl implements InternalPartitionService,
         operationService.invokeOnTarget(SERVICE_NAME, op, target);
     }
 
+    // TODO: rethink this method... send all partition versions and just send relevant partitions when needed?
     void checkClusterPartitionRuntimeStates() {
         if (!partitionStateManager.isInitialized()) {
             return;
@@ -799,6 +799,10 @@ public class InternalPartitionServiceImpl implements InternalPartitionService,
                 return false;
             }
 
+            if (isLocalMemberMaster()) {
+                return true;
+            }
+
             boolean appliedAllMigrations = true;
             for (MigrationInfo migration : migrations) {
                 InternalPartitionImpl partition = partitionStateManager.getPartitionImpl(migration.getPartitionId());
@@ -806,16 +810,16 @@ public class InternalPartitionServiceImpl implements InternalPartitionService,
 
                 if (migration.getFinalPartitionVersion() <= currentVersion) {
                     if (logger.isFinestEnabled()) {
-                        logger.finest("Already applied migration commit. Local version: " + currentVersion
+                        logger.finest("Already applied " + migration + ". Local version: " + currentVersion
                                 + ", Commit version: " + migration.getFinalPartitionVersion() + " Master: " + sender);
                     }
                     continue;
                 }
 
                 if (migration.getInitialPartitionVersion() != currentVersion) {
-                    logger.fine("Cannot apply migration commit! Expected version: " + migration.getInitialPartitionVersion()
-                            + ", current version: " + currentVersion + ", final version: " + migration.getFinalPartitionVersion()
-                            + ", Master: " + sender);
+                    logger.fine("Cannot apply migration commit: " + migration + ". Expected version: "
+                            + migration.getInitialPartitionVersion() + ", current version: " + currentVersion
+                            + ", final version: " + migration.getFinalPartitionVersion() + ", Master: " + sender);
                     appliedAllMigrations = false;
                     break;
                 }
@@ -1272,7 +1276,7 @@ public class InternalPartitionServiceImpl implements InternalPartitionService,
                         + ", current version: " + currentVersion + ", Master: " + sender);
             }
 
-            MigrationInfo activeMigration = migrationManager.getActiveMigration();
+            MigrationInfo activeMigration = migrationManager.getActiveMigration(migration.getPartitionId());
             assert migration.equals(activeMigration) : "Committed migration: " + migration
                     + ", Active migration: " + activeMigration;
 
@@ -1384,8 +1388,8 @@ public class InternalPartitionServiceImpl implements InternalPartitionService,
 
                     allCompletedMigrations.addAll(state.getCompletedMigrations());
 
-                    if (state.getActiveMigration() != null) {
-                        allActiveMigrations.add(state.getActiveMigration());
+                    if (state.getActiveMigrations() != null) {
+                        allActiveMigrations.addAll(state.getActiveMigrations());
                     }
                 }
             }
@@ -1470,9 +1474,7 @@ public class InternalPartitionServiceImpl implements InternalPartitionService,
         private void processMigrations(Collection<MigrationInfo> allCompletedMigrations,
                                        Collection<MigrationInfo> allActiveMigrations) {
             allCompletedMigrations.addAll(migrationManager.getCompletedMigrationsCopy());
-            if (migrationManager.getActiveMigration() != null) {
-                allActiveMigrations.add(migrationManager.getActiveMigration());
-            }
+            allActiveMigrations.addAll(migrationManager.getActiveMigrations());
 
             for (MigrationInfo activeMigration : allActiveMigrations) {
                 activeMigration.setStatus(MigrationStatus.FAILED);

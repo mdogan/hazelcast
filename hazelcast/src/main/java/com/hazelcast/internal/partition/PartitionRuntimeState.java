@@ -38,11 +38,11 @@ import static com.hazelcast.internal.util.StringUtil.LINE_SEPARATOR;
 public final class PartitionRuntimeState implements IdentifiedDataSerializable {
 
     private PartitionReplica[] allReplicas;
-    private int[][] minimizedPartitionTable;
+    private int[][] encodedPartitionTable;
     private int[] versions;
     private Collection<MigrationInfo> completedMigrations;
     // used to know ongoing migrations when master changed
-    private MigrationInfo activeMigration;
+    private Collection<MigrationInfo> activeMigrations;
 
     /** The sender of the operation which changes the partition table, should be the master node */
     private Address master;
@@ -50,12 +50,11 @@ public final class PartitionRuntimeState implements IdentifiedDataSerializable {
     public PartitionRuntimeState() {
     }
 
-    public PartitionRuntimeState(InternalPartition[] partitions, Collection<MigrationInfo> completedMigrations, int version) {
+    public PartitionRuntimeState(InternalPartition[] partitions, Collection<MigrationInfo> completedMigrations) {
         this.completedMigrations = completedMigrations != null ? completedMigrations : Collections.emptyList();
         Map<PartitionReplica, Integer> replicaToIndexes = createPartitionReplicaToIndexMap(partitions);
         allReplicas = toPartitionReplicaArray(replicaToIndexes);
-        versions = new int[partitions.length];
-        minimizedPartitionTable = createMinimizedPartitionTable(partitions, replicaToIndexes);
+        encodePartitionTable(partitions, replicaToIndexes);
     }
 
     private PartitionReplica[] toPartitionReplicaArray(Map<PartitionReplica, Integer> addressToIndexes) {
@@ -66,11 +65,12 @@ public final class PartitionRuntimeState implements IdentifiedDataSerializable {
         return replicas;
     }
 
-    private int[][] createMinimizedPartitionTable(InternalPartition[] partitions,
-            Map<PartitionReplica, Integer> replicaToIndexes) {
-        int[][] partitionTable = new int[partitions.length][MAX_REPLICA_COUNT];
+    private void encodePartitionTable(InternalPartition[] partitions, Map<PartitionReplica, Integer> replicaToIndexes) {
+        versions = new int[partitions.length];
+        encodedPartitionTable = new int[partitions.length][MAX_REPLICA_COUNT];
+
         for (InternalPartition partition : partitions) {
-            int[] indexes = partitionTable[partition.getPartitionId()];
+            int[] indexes = encodedPartitionTable[partition.getPartitionId()];
             versions[partition.getPartitionId()] = partition.getVersion();
 
             for (int replicaIndex = 0; replicaIndex < MAX_REPLICA_COUNT; replicaIndex++) {
@@ -83,10 +83,9 @@ public final class PartitionRuntimeState implements IdentifiedDataSerializable {
                 }
             }
         }
-        return partitionTable;
     }
 
-    private Map<PartitionReplica, Integer> createPartitionReplicaToIndexMap(InternalPartition[] partitions) {
+    private static Map<PartitionReplica, Integer> createPartitionReplicaToIndexMap(InternalPartition[] partitions) {
         Map<PartitionReplica, Integer> map = new HashMap<>();
         int addressIndex = 0;
         for (InternalPartition partition : partitions) {
@@ -104,28 +103,11 @@ public final class PartitionRuntimeState implements IdentifiedDataSerializable {
         return map;
     }
 
-    public PartitionReplica[][] getPartitionTable() {
-        int length = minimizedPartitionTable.length;
-        PartitionReplica[][] result = new PartitionReplica[length][MAX_REPLICA_COUNT];
-        for (int partitionId = 0; partitionId < length; partitionId++) {
-            int[] addressIndexes = minimizedPartitionTable[partitionId];
-            for (int replicaIndex = 0; replicaIndex < addressIndexes.length; replicaIndex++) {
-                int index = addressIndexes[replicaIndex];
-                if (index != -1) {
-                    PartitionReplica replica = allReplicas[index];
-                    assert replica != null;
-                    result[partitionId][replicaIndex] = replica;
-                }
-            }
-        }
-        return result;
-    }
-
     public InternalPartition[] getPartitions() {
-        int length = minimizedPartitionTable.length;
+        int length = encodedPartitionTable.length;
         InternalPartition[] result = new InternalPartition[length];
         for (int partitionId = 0; partitionId < length; partitionId++) {
-            int[] addressIndexes = minimizedPartitionTable[partitionId];
+            int[] addressIndexes = encodedPartitionTable[partitionId];
             PartitionReplica[] replicas = new PartitionReplica[MAX_REPLICA_COUNT];
             for (int replicaIndex = 0; replicaIndex < addressIndexes.length; replicaIndex++) {
                 int index = addressIndexes[replicaIndex];
@@ -144,7 +126,7 @@ public final class PartitionRuntimeState implements IdentifiedDataSerializable {
         return master;
     }
 
-    public void setMaster(final Address master) {
+    public void setMaster(Address master) {
         this.master = master;
     }
 
@@ -152,12 +134,12 @@ public final class PartitionRuntimeState implements IdentifiedDataSerializable {
         return completedMigrations != null ? completedMigrations : Collections.emptyList();
     }
 
-    public MigrationInfo getActiveMigration() {
-        return activeMigration;
+    public Collection<MigrationInfo> getActiveMigrations() {
+        return activeMigrations;
     }
 
-    public void setActiveMigration(MigrationInfo activeMigration) {
-        this.activeMigration = activeMigration;
+    public void setActiveMigrations(Collection<MigrationInfo> activeMigrations) {
+        this.activeMigrations = activeMigrations;
     }
 
     @Override
@@ -173,10 +155,10 @@ public final class PartitionRuntimeState implements IdentifiedDataSerializable {
         }
 
         int partitionCount = in.readInt();
-        minimizedPartitionTable = new int[partitionCount][MAX_REPLICA_COUNT];
+        encodedPartitionTable = new int[partitionCount][MAX_REPLICA_COUNT];
         versions = new int[partitionCount];
         for (int i = 0; i < partitionCount; i++) {
-            int[] indexes = minimizedPartitionTable[i];
+            int[] indexes = encodedPartitionTable[i];
             for (int ix = 0; ix < MAX_REPLICA_COUNT; ix++) {
                 indexes[ix] = in.readInt();
             }
@@ -185,7 +167,7 @@ public final class PartitionRuntimeState implements IdentifiedDataSerializable {
             versions[i] = in.readInt();
         }
 
-        activeMigration = in.readObject();
+        activeMigrations = readNullableCollection(in);
         completedMigrations = readNullableCollection(in);
     }
 
@@ -198,8 +180,8 @@ public final class PartitionRuntimeState implements IdentifiedDataSerializable {
             out.writeInt(index);
         }
 
-        out.writeInt(minimizedPartitionTable.length);
-        for (int[] indexes : minimizedPartitionTable) {
+        out.writeInt(encodedPartitionTable.length);
+        for (int[] indexes : encodedPartitionTable) {
             for (int ix = 0; ix < MAX_REPLICA_COUNT; ix++) {
                 out.writeInt(indexes[ix]);
             }
@@ -208,7 +190,7 @@ public final class PartitionRuntimeState implements IdentifiedDataSerializable {
             out.writeInt(version);
         }
 
-        out.writeObject(activeMigration);
+        writeNullableCollection(activeMigrations, out);
         writeNullableCollection(completedMigrations, out);
     }
 

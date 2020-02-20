@@ -77,8 +77,11 @@ import java.util.Queue;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Future;
+import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -115,7 +118,7 @@ public class MigrationManager {
     private final CoalescingDelayedTrigger delayedResumeMigrationTrigger;
     private final Set<Member> shutdownRequestedMembers = new HashSet<>();
     // updates will be done under lock, but reads will be multithreaded.
-    private volatile MigrationInfo activeMigrationInfo;
+    private final ConcurrentMap<Integer, MigrationInfo> activeMigrations = new ConcurrentHashMap<>();
     // both reads and updates will be done under lock!
     private final LinkedHashSet<MigrationInfo> completedMigrations = new LinkedHashSet<>();
     private final AtomicBoolean promotionPermit = new AtomicBoolean(false);
@@ -236,11 +239,11 @@ public class MigrationManager {
                 } else {
                     operationService.execute(op);
                 }
-                removeActiveMigration(partitionId);
+                removeActiveMigration(migrationInfo);
             } else {
                 PartitionReplica partitionOwner = partitionStateManager.getPartitionImpl(partitionId).getOwnerReplicaOrNull();
                 if (localReplica.equals(partitionOwner)) {
-                    removeActiveMigration(partitionId);
+                    removeActiveMigration(migrationInfo);
                     partitionStateManager.clearMigratingFlag(partitionId);
                 } else {
                     logger.severe("Failed to finalize migration because " + localReplica
@@ -269,29 +272,37 @@ public class MigrationManager {
 
     /**
      * Sets the active migration if none is set and returns {@code null}, otherwise returns the currently set active migration.
-     * Acquires the partition service lock.
      */
     public MigrationInfo setActiveMigration(MigrationInfo migrationInfo) {
-        partitionServiceLock.lock();
-        try {
-            if (activeMigrationInfo == null) {
-                activeMigrationInfo = migrationInfo;
-                return null;
-            }
-            if (!activeMigrationInfo.equals(migrationInfo)) {
-                if (logger.isFineEnabled()) {
-                    logger.fine("Active migration is not set: " + migrationInfo
-                            + ". Existing active migration: " + activeMigrationInfo);
-                }
-            }
-            return activeMigrationInfo;
-        } finally {
-            partitionServiceLock.unlock();
-        }
+        return activeMigrations.putIfAbsent(migrationInfo.getPartitionId(), migrationInfo);
     }
 
-    public MigrationInfo getActiveMigration() {
-        return activeMigrationInfo;
+    public MigrationInfo getActiveMigration(int partitionId) {
+        return activeMigrations.get(partitionId);
+    }
+
+    public Collection<MigrationInfo> getActiveMigrations() {
+        return Collections.unmodifiableCollection(activeMigrations.values());
+    }
+
+    /**
+     * Removes the current {@code activeMigration} if the {@code migration} is the same
+     * and returns {@code true} if removed.
+     * @param migration migration
+     */
+    private boolean removeActiveMigration(MigrationInfo migration) {
+        MigrationInfo activeMigration =
+                activeMigrations.computeIfPresent(migration.getPartitionId(),
+                        (k, currentMigration) -> currentMigration.equals(migration) ? null : currentMigration);
+
+        if (activeMigration != null) {
+            //            if (logger.isFineEnabled()) {
+            logger.warning("Active migration is not removed, because it has different migration! "
+                    + "migration=" + migration + ", active migration=" + activeMigration);
+            //            }
+            return false;
+        }
+        return true;
     }
 
     /**
@@ -320,30 +331,6 @@ public class MigrationManager {
     }
 
     /**
-     * Removes the current {@link #activeMigrationInfo} if the {@code partitionId} is the same and returns {@code true} if
-     * removed.
-     * Acquires the partition service lock.
-     */
-    private boolean removeActiveMigration(int partitionId) {
-        partitionServiceLock.lock();
-        try {
-            if (activeMigrationInfo != null) {
-                if (activeMigrationInfo.getPartitionId() == partitionId) {
-                    activeMigrationInfo = null;
-                    return true;
-                }
-                if (logger.isFineEnabled()) {
-                    logger.fine("Active migration is not removed, because it has different partitionId! "
-                            + "partitionId=" + partitionId + ", active migration=" + activeMigrationInfo);
-                }
-            }
-        } finally {
-            partitionServiceLock.unlock();
-        }
-        return false;
-    }
-
-    /**
      * Finalizes the active migration if it is equal to the {@code migrationInfo} or if this node was a backup replica before
      * the migration (see {@link FinalizeMigrationOperation}).
      * Acquires the partition service lock.
@@ -351,19 +338,22 @@ public class MigrationManager {
     void scheduleActiveMigrationFinalization(final MigrationInfo migrationInfo) {
         partitionServiceLock.lock();
         try {
+            MigrationInfo activeMigrationInfo = getActiveMigration(migrationInfo.getPartitionId());
             if (migrationInfo.equals(activeMigrationInfo)) {
                 if (activeMigrationInfo.startProcessing()) {
                     activeMigrationInfo.setStatus(migrationInfo.getStatus());
                     finalizeMigration(activeMigrationInfo);
                 } else {
-                    // This case happens when master crashes while migration operation is running
-                    // and new master publishes the latest completed migrations
-                    // after collecting active and completed migrations from existing members.
-                    // See FetchMostRecentPartitionTableTask.
-                    logger.info("Scheduling finalization of " + migrationInfo
-                            + ", because migration process is currently running.");
-                    nodeEngine.getExecutionService().schedule(() ->
-                            scheduleActiveMigrationFinalization(migrationInfo), 1, TimeUnit.SECONDS);
+                    // TODO: This should not happen anymore after commit: e2d8a08e7a0781dca8f1d36f422f0b72b044d32d
+//                    // This case happens when master crashes while migration operation is running
+//                    // and new master publishes the latest completed migrations
+//                    // after collecting active and completed migrations from existing members.
+//                    // See FetchMostRecentPartitionTableTask.
+//                    logger.info("Scheduling finalization of " + migrationInfo
+//                            + ", because migration process is currently running.");
+//                    nodeEngine.getExecutionService().schedule(() ->
+//                            scheduleActiveMigrationFinalization(migrationInfo), 1, TimeUnit.SECONDS);
+                    throw new AssertionError("Migration: " + activeMigrationInfo);
                 }
                 return;
             }
@@ -554,8 +544,7 @@ public class MigrationManager {
 
     void onMemberRemove(Member member) {
         shutdownRequestedMembers.remove(member);
-        MigrationInfo activeMigration = activeMigrationInfo;
-        if (activeMigration != null) {
+        for (MigrationInfo activeMigration : activeMigrations.values()) {
             PartitionReplica replica = PartitionReplica.from(member);
             if (replica.equals(activeMigration.getSource())
                     || replica.equals(activeMigration.getDestination())) {
@@ -579,7 +568,7 @@ public class MigrationManager {
     }
 
     boolean hasOnGoingMigration() {
-        return activeMigrationInfo != null || hasMigrationTasks();
+        return !activeMigrations.isEmpty() || hasMigrationTasks();
     }
 
     private boolean hasMigrationTasks() {
@@ -594,7 +583,7 @@ public class MigrationManager {
     void reset() {
         migrationQueue.clear();
         migrationCount.set(0);
-        activeMigrationInfo = null;
+        activeMigrations.clear();
         completedMigrations.clear();
         shutdownRequestedMembers.clear();
         migrationTasksAllowed.set(true);
@@ -962,12 +951,12 @@ public class MigrationManager {
                 }
             }
         }
-
     }
 
     class MigrationPlanTask implements MigrationRunnable {
         private final List<Queue<MigrationInfo>> migrations;
-        private volatile boolean abort;
+        private boolean failed;
+        private volatile boolean aborted;
 
         public MigrationPlanTask(List<Queue<MigrationInfo>> migrations) {
             this.migrations = migrations;
@@ -977,43 +966,149 @@ public class MigrationManager {
         public void run() {
             migrationCount.set(migrations.stream().mapToInt(Collection::size).sum());
 
-            while (!migrations.isEmpty()) {
-                Iterator<Queue<MigrationInfo>> iter = migrations.iterator();
+            ExecutorService executor = nodeEngine.getExecutionService().getExecutor("hz:migration");
+            final int max = 5;
+            Semaphore permits = new Semaphore(max);
+            Set<Future<Boolean>> futures = new HashSet<>();
+            Set<Integer> partitions = Collections.newSetFromMap(new ConcurrentHashMap<>());
+
+            MigrationInfo migration;
+            while ((migration = next()) != null) {
+
+                if (!acquirePermit(permits)) {
+                    break;
+                }
+
+                Iterator<Future<Boolean>> iter = futures.iterator();
                 while (iter.hasNext()) {
-                    Queue<MigrationInfo> q = iter.next();
-                    if (q.isEmpty()) {
-                        iter.remove();
+                    Future<Boolean> future = iter.next();
+                    if (!future.isDone()) {
                         continue;
                     }
 
-                    MigrationInfo migration = q.poll();
-                    migrationCount.decrementAndGet();
-
-                    boolean success = new MigrateTask(migration).call();
-
-                    if (!success || abort) {
-                        logger.warning("Ignoring remaining migrations. Will recalculate the new migration plan. ("
-                                + stats.formatToString(logger.isFineEnabled()) + ")");
-                        migrationCount.set(0);
-                        return;
+                    iter.remove();
+                    boolean success = false;
+                    try {
+                        success = future.get();
+                    } catch (Exception ignored) {
                     }
 
-                    if (partitionMigrationInterval > 0) {
-                        try {
-                            Thread.sleep(partitionMigrationInterval);
-                        } catch (InterruptedException e) {
-                            logger.info("MigrationProcessTask is interrupted! Ignoring remaining migrations...");
-                            migrationCount.set(0);
-                            return;
-                        }
+                    if (!success) {
+                        failed = true;
+                        break;
                     }
                 }
+
+                if (failed | aborted) {
+                    break;
+                }
+
+                while (!partitions.add(migration.getPartitionId())) {
+                    try {
+                        Thread.sleep(500);
+                    } catch (InterruptedException e) {
+//                        onInterrupted();
+//                        break;
+                    }
+                }
+
+                migrationCount.decrementAndGet();
+
+                MigrationInfo m = migration;
+                Future<Boolean> future = executor.submit(() -> {
+                    try {
+                        return new MigrateTask(m).call();
+                    } catch (Exception e) {
+                        logger.warning(e);
+                        return false;
+                    } finally {
+                        partitions.remove(m.getPartitionId());
+                        permits.release();
+                    }
+                });
+                futures.add(future);
+
+                if (!pause()) {
+                    break;
+                }
             }
-            logger.info("All migration tasks have been completed. (" + stats.formatToString(logger.isFineEnabled()) + ")");
+
+            for (Future<Boolean> future : futures) {
+                boolean success = false;
+                try {
+                    success = future.get();
+                } catch (Exception ignored) {
+                }
+                if (!success) {
+                    failed = true;
+                }
+            }
+
+            if (failed || aborted) {
+                logger.info("Rebalance process was " + (failed ? " failed" : "aborted")
+                        + ". Ignoring remaining migrations. Will recalculate the new migration plan. ("
+                        + stats.formatToString(logger.isFineEnabled()) + ")");
+                migrationCount.set(0);
+                migrations.clear();
+            } else {
+                logger.info("All migration tasks have been completed. (" + stats.formatToString(logger.isFineEnabled()) + ")");
+            }
+        }
+
+        private boolean pause() {
+            if (partitionMigrationInterval > 0) {
+                try {
+                    Thread.sleep(partitionMigrationInterval);
+                } catch (InterruptedException e) {
+                    onInterrupted();
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        private boolean acquirePermit(Semaphore s) {
+            while (!aborted) {
+                try {
+                    if (s.tryAcquire(500, TimeUnit.MILLISECONDS)) {
+                        return true;
+                    }
+                } catch (InterruptedException e) {
+                    onInterrupted();
+                    break;
+                }
+            }
+            return false;
+        }
+
+        private void onInterrupted() {
+            logger.info("MigrationProcessTask is interrupted! Ignoring remaining migrations...");
+            migrations.clear();
+            migrationCount.set(0);
+            Thread.currentThread().interrupt();
+            abort();
+        }
+
+        private MigrationInfo next() {
+            if (migrations.isEmpty()) {
+                return null;
+            }
+
+            Iterator<Queue<MigrationInfo>> iter = migrations.iterator();
+            while (iter.hasNext()) {
+                Queue<MigrationInfo> q = iter.next();
+                if (q.isEmpty()) {
+                    iter.remove();
+                    continue;
+                }
+
+                return q.poll();
+            }
+            return null;
         }
 
         void abort() {
-            abort = true;
+            aborted = true;
         }
     }
 
@@ -1629,10 +1724,6 @@ public class MigrationManager {
      * Task to publish completed migrations to cluster members after all migration tasks are consumed.
      */
     private class PublishCompletedMigrationsTask implements MigrationRunnable {
-
-        public PublishCompletedMigrationsTask() {
-            System.err.println("getStats() = " + getStats());
-        }
 
         @Override
         public void run() {

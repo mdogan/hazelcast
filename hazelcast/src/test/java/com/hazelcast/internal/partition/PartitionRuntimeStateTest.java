@@ -90,7 +90,7 @@ public class PartitionRuntimeStateTest extends HazelcastTestSupport {
 
     private PartitionRuntimeState createPartitionState(int partitionId, PartitionReplica... replicas) {
         DummyInternalPartition partition = new DummyInternalPartition(replicas, partitionId);
-        return new PartitionRuntimeState(new InternalPartition[]{partition}, Collections.emptyList(), partitionId);
+        return new PartitionRuntimeState(new InternalPartition[]{partition}, Collections.emptyList());
     }
 
     private PartitionReplica replica(String host, int port) throws UnknownHostException {

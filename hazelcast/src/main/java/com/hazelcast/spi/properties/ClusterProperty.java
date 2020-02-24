@@ -644,6 +644,10 @@ public final class ClusterProperty {
             = new HazelcastProperty("hazelcast.partition.table.send.interval", 15, SECONDS);
     public static final HazelcastProperty PARTITION_BACKUP_SYNC_INTERVAL
             = new HazelcastProperty("hazelcast.partition.backup.sync.interval", 30, SECONDS);
+    // TODO: ?
+    public static final HazelcastProperty PARTITION_MAX_PARALLEL_MIGRATIONS
+            = new HazelcastProperty("hazelcast.partition.max.parallel.migrations", 3);
+    // TODO: ?
     public static final HazelcastProperty PARTITION_MAX_PARALLEL_REPLICATIONS
             = new HazelcastProperty("hazelcast.partition.max.parallel.replications", 5);
     public static final HazelcastProperty PARTITIONING_STRATEGY_CLASS

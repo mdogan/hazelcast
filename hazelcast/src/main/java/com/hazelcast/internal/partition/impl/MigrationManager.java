@@ -76,16 +76,19 @@ import java.util.Objects;
 import java.util.Queue;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.ArrayBlockingQueue;
+import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.ExecutionException;
-import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executor;
 import java.util.concurrent.Future;
-import java.util.concurrent.Semaphore;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.locks.Lock;
+import java.util.function.BiFunction;
 import java.util.function.IntConsumer;
 import java.util.logging.Level;
 import java.util.stream.Collectors;
@@ -129,11 +132,10 @@ public class MigrationManager {
     private final boolean fragmentedMigrationEnabled;
     private final long memberHeartbeatTimeoutMillis;
     private boolean triggerRepartitioningWhenClusterStateAllowsMigration;
-
+    private final int maxParallelMigrations;
+    private final AtomicInteger migrationCount = new AtomicInteger();
     // TODO: This might not be needed anymore
     private final Set<MigrationInfo> finalizingMigrationsRegistry = Collections.newSetFromMap(new ConcurrentHashMap<>());
-
-    private final AtomicInteger migrationCount = new AtomicInteger();
 
     MigrationManager(Node node, InternalPartitionServiceImpl service, Lock partitionServiceLock) {
         this.node = node;
@@ -146,6 +148,7 @@ public class MigrationManager {
         partitionMigrationInterval = properties.getPositiveMillisOrDefault(ClusterProperty.PARTITION_MIGRATION_INTERVAL, 0);
         partitionMigrationTimeout = properties.getMillis(ClusterProperty.PARTITION_MIGRATION_TIMEOUT);
         fragmentedMigrationEnabled = properties.getBoolean(ClusterProperty.PARTITION_FRAGMENTED_MIGRATION_ENABLED);
+        maxParallelMigrations = properties.getInteger(ClusterProperty.PARTITION_MAX_PARALLEL_MIGRATIONS);
         partitionStateManager = partitionService.getPartitionStateManager();
         ILogger migrationThreadLogger = node.getLogger(MigrationThread.class);
         String hzName = nodeEngine.getHazelcastInstance().getName();
@@ -955,94 +958,60 @@ public class MigrationManager {
 
     class MigrationPlanTask implements MigrationRunnable {
         private final List<Queue<MigrationInfo>> migrations;
+        private final BlockingQueue<MigrationInfo> completed;
+        private final Set<Integer> partitions = new HashSet<>();
+        private final Map<Address, Integer> endpoints = new HashMap<>();
         private boolean failed;
+        private int ongoing;
         private volatile boolean aborted;
 
         public MigrationPlanTask(List<Queue<MigrationInfo>> migrations) {
             this.migrations = migrations;
+            completed = new ArrayBlockingQueue<>(migrations.size());
         }
 
         @Override
         public void run() {
             migrationCount.set(migrations.stream().mapToInt(Collection::size).sum());
 
-            ExecutorService executor = nodeEngine.getExecutionService().getExecutor("hz:migration");
-            final int max = 5;
-            Semaphore permits = new Semaphore(max);
-            Set<Future<Boolean>> futures = new HashSet<>();
-            Set<Integer> partitions = Collections.newSetFromMap(new ConcurrentHashMap<>());
+            Executor executor = nodeEngine.getExecutionService().getExecutor("hz:migration");
 
-            MigrationInfo migration;
-            while ((migration = next()) != null) {
-
-                if (!acquirePermit(permits)) {
+            while (true) {
+                MigrationInfo migration = next();
+                if (migration == null) {
                     break;
-                }
-
-                Iterator<Future<Boolean>> iter = futures.iterator();
-                while (iter.hasNext()) {
-                    Future<Boolean> future = iter.next();
-                    if (!future.isDone()) {
-                        continue;
-                    }
-
-                    iter.remove();
-                    boolean success = false;
-                    try {
-                        success = future.get();
-                    } catch (Exception ignored) {
-                    }
-
-                    if (!success) {
-                        failed = true;
-                        break;
-                    }
                 }
 
                 if (failed | aborted) {
                     break;
                 }
 
-                while (!partitions.add(migration.getPartitionId())) {
-                    try {
-                        Thread.sleep(500);
-                    } catch (InterruptedException e) {
-//                        onInterrupted();
-//                        break;
-                    }
+                onStart(migration);
+
+                try {
+                    // TODO: make async without thread pool...
+                    executor.execute(() -> {
+                        try {
+                            new MigrateTask(migration).run();
+                        } catch (Exception e) {
+                            logger.warning(e);
+                        } finally {
+                            boolean offered = completed.offer(migration);
+                            assert offered : "Failed to offer completed migration: " + migration;
+                        }
+                    });
+                } catch (RejectedExecutionException e) {
+                    logger.info("Could not submit migration task", e);
+                    boolean offered = completed.offer(migration);
+                    assert offered : "Failed to offer completed migration: " + migration;
                 }
 
-                migrationCount.decrementAndGet();
-
-                MigrationInfo m = migration;
-                Future<Boolean> future = executor.submit(() -> {
-                    try {
-                        return new MigrateTask(m).call();
-                    } catch (Exception e) {
-                        logger.warning(e);
-                        return false;
-                    } finally {
-                        partitions.remove(m.getPartitionId());
-                        permits.release();
-                    }
-                });
-                futures.add(future);
-
-                if (!pause()) {
+                if (!migrationDelay()) {
                     break;
                 }
             }
 
-            for (Future<Boolean> future : futures) {
-                boolean success = false;
-                try {
-                    success = future.get();
-                } catch (Exception ignored) {
-                }
-                if (!success) {
-                    failed = true;
-                }
-            }
+            waitOngoingMigrations();
 
             if (failed || aborted) {
                 logger.info("Rebalance process was " + (failed ? " failed" : "aborted")
@@ -1055,45 +1024,76 @@ public class MigrationManager {
             }
         }
 
-        private boolean pause() {
-            if (partitionMigrationInterval > 0) {
-                try {
-                    Thread.sleep(partitionMigrationInterval);
-                } catch (InterruptedException e) {
-                    onInterrupted();
-                    return false;
-                }
-            }
-            return true;
+        private void onStart(MigrationInfo migration) {
+            boolean added = partitions.add(migration.getPartitionId());
+            assert added : migration.toString();
+
+            BiFunction<Address, Integer, Integer> inc = (address, current) -> current != null ? current + 1 : 1;
+
+            int count = endpoints.compute(migration.getDestinationAddress(), inc);
+            assert count > 0 && count <= maxParallelMigrations : "Count: " + count + " -> " + migration;
+
+            count = endpoints.compute(sourceAddress(migration), inc);
+            assert count > 0 && count <= maxParallelMigrations : "Count: " + count + " -> " + migration;
+
+            ongoing++;
+            migrationCount.decrementAndGet();
         }
 
-        private boolean acquirePermit(Semaphore s) {
-            while (!aborted) {
-                try {
-                    if (s.tryAcquire(500, TimeUnit.MILLISECONDS)) {
-                        return true;
-                    }
-                } catch (InterruptedException e) {
-                    onInterrupted();
-                    break;
-                }
+        private void onComplete(MigrationInfo migration) {
+            boolean removed = partitions.remove(migration.getPartitionId());
+            assert removed : migration.toString();
+
+            BiFunction<Address, Integer, Integer> dec = (address, current) -> current != null ? current - 1 : -1;
+
+            long count = endpoints.compute(migration.getDestinationAddress(), dec);
+            assert count >= 0 && count < maxParallelMigrations : "Count: " + count + " -> " + migration;
+
+            count = endpoints.compute(sourceAddress(migration), dec);
+            assert count >= 0 && count < maxParallelMigrations : "Count: " + count + " -> " + migration;
+
+            if (migration.getStatus() != MigrationStatus.SUCCESS) {
+                failed = true;
             }
-            return false;
+
+            ongoing--;
         }
 
-        private void onInterrupted() {
-            logger.info("MigrationProcessTask is interrupted! Ignoring remaining migrations...");
-            migrations.clear();
-            migrationCount.set(0);
-            Thread.currentThread().interrupt();
-            abort();
+        private boolean processCompleted() {
+            boolean ok = false;
+            MigrationInfo migration;
+            while ((migration = completed.poll()) != null) {
+                onComplete(migration);
+                ok = true;
+            }
+            return ok;
         }
 
         private MigrationInfo next() {
-            if (migrations.isEmpty()) {
-                return null;
-            }
+            MigrationInfo m;
+            while ((m = next0()) == null) {
+                if (migrations.isEmpty()) {
+                    break;
+                }
 
+                if (failed | aborted) {
+                    break;
+                }
+
+                if (!processCompleted()) {
+                    try {
+                        MigrationInfo migration = completed.take();
+                        onComplete(migration);
+                    } catch (InterruptedException e) {
+                        onInterrupted(e);
+                        break;
+                    }
+                }
+            }
+            return m;
+        }
+
+        private MigrationInfo next0() {
             Iterator<Queue<MigrationInfo>> iter = migrations.iterator();
             while (iter.hasNext()) {
                 Queue<MigrationInfo> q = iter.next();
@@ -1102,9 +1102,69 @@ public class MigrationManager {
                     continue;
                 }
 
+                if (!select(q.peek())) {
+                    continue;
+                }
+
                 return q.poll();
             }
             return null;
+        }
+
+        private boolean select(MigrationInfo m) {
+            if (m == null) {
+                return true;
+            }
+
+            if (partitions.contains(m.getPartitionId())) {
+                return false;
+            }
+            if (endpoints.getOrDefault(m.getDestinationAddress(), 0) == maxParallelMigrations) {
+                return false;
+            }
+            return endpoints.getOrDefault(sourceAddress(m), 0) < maxParallelMigrations;
+        }
+
+        private Address sourceAddress(MigrationInfo m) {
+            if (m.getSourceCurrentReplicaIndex() == 0) {
+                return m.getSourceAddress();
+            }
+            InternalPartitionImpl partition = partitionStateManager.getPartitionImpl(m.getPartitionId());
+            return partition.getOwnerOrNull();
+        }
+
+        // TODO: do we still need this?
+        private boolean migrationDelay() {
+            if (partitionMigrationInterval > 0) {
+                try {
+                    Thread.sleep(partitionMigrationInterval);
+                } catch (InterruptedException e) {
+                    onInterrupted(e);
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        private void waitOngoingMigrations() {
+            boolean interrupted = false;
+            while (ongoing > 0) {
+                try {
+                    MigrationInfo migration = completed.take();
+                    onComplete(migration);
+                } catch (InterruptedException ignored) {
+                    interrupted = true;
+                }
+            }
+            if (interrupted) {
+                Thread.currentThread().interrupt();
+            }
+        }
+
+        private void onInterrupted(InterruptedException e) {
+            logger.info("MigrationProcessTask is interrupted! Ignoring remaining migrations...", e);
+            Thread.currentThread().interrupt();
+            abort();
         }
 
         void abort() {
@@ -1126,12 +1186,8 @@ public class MigrationManager {
 
         @Override
         public void run() {
-            call();
-        }
-
-        boolean call() {
             if (!partitionService.isLocalMemberMaster()) {
-                return false;
+                return;
             }
             if (migration.getSource() == null
                     && migration.getDestinationCurrentReplicaIndex() > 0
@@ -1143,13 +1199,12 @@ public class MigrationManager {
 
             Member partitionOwner = checkMigrationParticipantsAndGetPartitionOwner();
             if (partitionOwner == null) {
-                return true;
+                return;
             }
-            Boolean result = Boolean.FALSE;
             long start = System.nanoTime();
             try {
                 beforeMigration();
-                result = executeMigrateOperation(partitionOwner);
+                Boolean result = executeMigrateOperation(partitionOwner);
                 processMigrationResult(partitionOwner, result);
             } catch (Throwable t) {
                 final Level level = migration.isValid() ? Level.WARNING : Level.FINE;
@@ -1162,7 +1217,6 @@ public class MigrationManager {
                 partitionEventManager.sendMigrationEvent(stats.toMigrationState(), migration,
                         TimeUnit.NANOSECONDS.toMillis(elapsed));
             }
-            return result;
         }
 
         /** Sends a migration event to the event listeners. */

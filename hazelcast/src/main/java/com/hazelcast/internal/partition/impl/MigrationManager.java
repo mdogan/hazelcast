@@ -48,6 +48,7 @@ import com.hazelcast.internal.util.Clock;
 import com.hazelcast.internal.util.Preconditions;
 import com.hazelcast.internal.util.collection.Int2ObjectHashMap;
 import com.hazelcast.internal.util.collection.PartitionIdSet;
+import com.hazelcast.internal.util.executor.ExecutorType;
 import com.hazelcast.internal.util.scheduler.CoalescingDelayedTrigger;
 import com.hazelcast.logging.ILogger;
 import com.hazelcast.partition.ReplicaMigrationEvent;
@@ -107,6 +108,7 @@ public class MigrationManager {
 
     private static final int MIGRATION_PAUSE_DURATION_SECONDS_ON_MIGRATION_FAILURE = 3;
     private static final int PUBLISH_COMPLETED_MIGRATIONS_BATCH_SIZE = 10;
+    private static final String MIGRATION_EXECUTOR_NAME = "hz:migration";
 
     final long partitionMigrationInterval;
     private final Node node;
@@ -159,6 +161,8 @@ public class MigrationManager {
                 executionService, migrationPauseDelayMs, 2 * migrationPauseDelayMs, this::resumeMigration);
         this.memberHeartbeatTimeoutMillis = properties.getMillis(ClusterProperty.MAX_NO_HEARTBEAT_SECONDS);
         nodeEngine.getMetricsRegistry().registerStaticMetrics(stats, PARTITIONS_PREFIX);
+
+        nodeEngine.getExecutionService().register(MIGRATION_EXECUTOR_NAME, 100, Integer.MAX_VALUE, ExecutorType.CACHED);
     }
 
     @Probe(name = MIGRATION_METRIC_MIGRATION_MANAGER_MIGRATION_ACTIVE, unit = BOOLEAN)
@@ -973,8 +977,7 @@ public class MigrationManager {
         @Override
         public void run() {
             migrationCount.set(migrations.stream().mapToInt(Collection::size).sum());
-
-            Executor executor = nodeEngine.getExecutionService().getExecutor("hz:migration");
+            Executor executor = nodeEngine.getExecutionService().getExecutor(MIGRATION_EXECUTOR_NAME);
 
             while (true) {
                 MigrationInfo migration = next();
@@ -989,7 +992,7 @@ public class MigrationManager {
                 onStart(migration);
 
                 try {
-                    // TODO: make async without thread pool...
+                    // TODO: Can we make this part async without using a thread pool?
                     executor.execute(() -> {
                         try {
                             new MigrateTask(migration).run();
@@ -1076,10 +1079,6 @@ public class MigrationManager {
                     break;
                 }
 
-                if (failed | aborted) {
-                    break;
-                }
-
                 if (!processCompleted()) {
                     try {
                         MigrationInfo migration = completed.take();
@@ -1088,6 +1087,10 @@ public class MigrationManager {
                         onInterrupted(e);
                         break;
                     }
+                }
+
+                if (failed | aborted) {
+                    break;
                 }
             }
             return m;

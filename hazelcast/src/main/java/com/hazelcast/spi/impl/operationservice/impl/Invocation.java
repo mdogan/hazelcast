@@ -281,6 +281,7 @@ public abstract class Invocation<T> extends BaseInvocation implements OperationR
             if (previousTargetMember != null) {
                 // If a target member was found earlier but current target member is null
                 // then it means a member left.
+                // TODO: not always true ??
                 throw new MemberLeftException(previousTargetMember);
             }
             if (!(isJoinOperation(op) || isWanReplicationOperation(op))) {

@@ -438,8 +438,8 @@ class ByteArrayObjectDataOutput extends VersionedObjectDataOutput implements Buf
 
     @Override
     public void close() {
-        pos = 0;
-        buffer = null;
+//        pos = 0;
+//        buffer = null;
     }
 
     @Override

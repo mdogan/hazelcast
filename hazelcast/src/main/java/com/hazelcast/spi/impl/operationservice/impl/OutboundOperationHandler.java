@@ -16,11 +16,13 @@
 
 package com.hazelcast.spi.impl.operationservice.impl;
 
-import com.hazelcast.instance.impl.Node;
-import com.hazelcast.internal.serialization.InternalSerializationService;
 import com.hazelcast.cluster.Address;
+import com.hazelcast.instance.impl.Node;
 import com.hazelcast.internal.nio.Connection;
 import com.hazelcast.internal.nio.Packet;
+import com.hazelcast.internal.partition.operation.MigrationOperation;
+import com.hazelcast.internal.serialization.InternalSerializationService;
+import com.hazelcast.internal.util.counters.Counter;
 import com.hazelcast.spi.impl.operationservice.Operation;
 
 import static com.hazelcast.instance.EndpointQualifier.MEMBER;
@@ -34,11 +36,16 @@ public class OutboundOperationHandler {
     private final Address thisAddress;
     private final InternalSerializationService serializationService;
     private final Node node;
+    private final Counter migrationDataSize;
+    private final Counter migrationSerTime;
 
-    public OutboundOperationHandler(Node node, Address thisAddress, InternalSerializationService serializationService) {
+    public OutboundOperationHandler(Node node, Address thisAddress, InternalSerializationService serializationService,
+            Counter migrationDataSize, Counter migrationSerTime) {
         this.node = node;
         this.thisAddress = thisAddress;
         this.serializationService = serializationService;
+        this.migrationDataSize = migrationDataSize;
+        this.migrationSerTime = migrationSerTime;
     }
 
     public boolean send(Operation op, Address target) {
@@ -53,7 +60,19 @@ public class OutboundOperationHandler {
     }
 
     public boolean send(Operation op, Connection connection) {
+        boolean mig = op instanceof MigrationOperation;
+        long start = 0;
+        if (mig) {
+            start = System.nanoTime();
+        }
+
         byte[] bytes = serializationService.toBytes(op);
+
+        if (mig) {
+            migrationDataSize.inc(bytes.length);
+            migrationSerTime.inc(System.nanoTime() - start);
+        }
+
         int partitionId = op.getPartitionId();
         Packet packet = new Packet(bytes, partitionId).setPacketType(Packet.Type.OPERATION);
 

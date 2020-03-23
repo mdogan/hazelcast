@@ -35,6 +35,7 @@ import com.hazelcast.internal.nio.Connection;
 import com.hazelcast.internal.nio.Packet;
 import com.hazelcast.internal.partition.InternalPartition;
 import com.hazelcast.internal.partition.PartitionReplica;
+import com.hazelcast.internal.partition.operation.MigrationOperation;
 import com.hazelcast.internal.serialization.Data;
 import com.hazelcast.internal.serialization.impl.SerializationServiceV1;
 import com.hazelcast.internal.util.ExceptionUtil;
@@ -415,8 +416,12 @@ class OperationRunnerImpl extends OperationRunner implements StaticMetricsProvid
         Connection connection = packet.getConn();
         Address caller = connection.getEndPoint();
         try {
+            long start = System.nanoTime();
             Object object = nodeEngine.toObject(packet);
             Operation op = (Operation) object;
+            if (op instanceof MigrationOperation) {
+                operationService.migrationDeserTime.inc(System.nanoTime() - start);
+            }
             op.setNodeEngine(nodeEngine);
             setCallerAddress(op, caller);
             setConnection(op, connection);
@@ -432,6 +437,7 @@ class OperationRunnerImpl extends OperationRunner implements StaticMetricsProvid
             }
             run(op);
         } catch (Throwable throwable) {
+            logger.severe(throwable);
             // If exception happens we need to extract the callId from the bytes directly!
             long callId = extractOperationCallId(packet);
             outboundResponseHandler.send(connection.getEndpointManager(), caller,

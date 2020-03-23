@@ -17,9 +17,15 @@
 package com.hazelcast.internal.serialization.impl;
 
 import com.hazelcast.instance.BuildInfoProvider;
-import com.hazelcast.internal.serialization.DataSerializerHook;
-import com.hazelcast.logging.Logger;
 import com.hazelcast.internal.nio.ClassLoaderUtil;
+import com.hazelcast.internal.serialization.DataSerializerHook;
+import com.hazelcast.internal.serialization.impl.DataSerializableHeader.CompressionMethod;
+import com.hazelcast.internal.serialization.impl.compression.CompressionObjectDataInput;
+import com.hazelcast.internal.serialization.impl.compression.CompressionObjectDataOutput;
+import com.hazelcast.internal.util.ExceptionUtil;
+import com.hazelcast.internal.util.ServiceLoader;
+import com.hazelcast.internal.util.collection.Int2ObjectHashMap;
+import com.hazelcast.logging.Logger;
 import com.hazelcast.nio.ObjectDataInput;
 import com.hazelcast.nio.ObjectDataOutput;
 import com.hazelcast.nio.serialization.DataSerializable;
@@ -29,9 +35,7 @@ import com.hazelcast.nio.serialization.IdentifiedDataSerializable;
 import com.hazelcast.nio.serialization.StreamSerializer;
 import com.hazelcast.nio.serialization.TypedDataSerializable;
 import com.hazelcast.nio.serialization.TypedStreamDeserializer;
-import com.hazelcast.internal.util.ExceptionUtil;
-import com.hazelcast.internal.util.ServiceLoader;
-import com.hazelcast.internal.util.collection.Int2ObjectHashMap;
+import com.hazelcast.nio.serialization.impl.Compressed;
 import com.hazelcast.version.Version;
 
 import java.io.IOException;
@@ -39,6 +43,13 @@ import java.lang.reflect.Modifier;
 import java.util.Iterator;
 import java.util.Map;
 
+import static com.hazelcast.internal.serialization.impl.DataSerializableHeader.COMPRESSION;
+import static com.hazelcast.internal.serialization.impl.DataSerializableHeader.createCompressionInput;
+import static com.hazelcast.internal.serialization.impl.DataSerializableHeader.createCompressionOutput;
+import static com.hazelcast.internal.serialization.impl.DataSerializableHeader.createHeader;
+import static com.hazelcast.internal.serialization.impl.DataSerializableHeader.isCompressed;
+import static com.hazelcast.internal.serialization.impl.DataSerializableHeader.isIdentifiedDataSerializable;
+import static com.hazelcast.internal.serialization.impl.DataSerializableHeader.isVersioned;
 import static com.hazelcast.internal.serialization.impl.SerializationConstants.CONSTANT_TYPE_DATA_SERIALIZABLE;
 
 /**
@@ -50,9 +61,6 @@ import static com.hazelcast.internal.serialization.impl.SerializationConstants.C
  */
 @SuppressWarnings("checkstyle:npathcomplexity")
 final class DataSerializableSerializer implements StreamSerializer<DataSerializable>, TypedStreamDeserializer<DataSerializable> {
-
-    public static final byte IDS_FLAG = 1 << 0;
-    public static final byte EE_FLAG = 1 << 1;
 
     private static final String FACTORY_ID = "com.hazelcast.DataSerializerHook";
 
@@ -114,7 +122,7 @@ final class DataSerializableSerializer implements StreamSerializer<DataSerializa
 
     private DataSerializable readInternal(ObjectDataInput in, Class aClass)
             throws IOException {
-        setInputVersion(in, version);
+        in.setVersion(version);
         DataSerializable ds = null;
         if (null != aClass) {
             try {
@@ -125,14 +133,24 @@ final class DataSerializableSerializer implements StreamSerializer<DataSerializa
             }
         }
 
+        // Always read header without compression
         final byte header = in.readByte();
         int id = 0;
         int factoryId = 0;
         String className = null;
+
+        CompressionObjectDataInput compressedIn = null;
+        if (isCompressed(header)) {
+            compressedIn = createCompressionInput(in);
+            if (compressedIn != null) {
+                in = compressedIn;
+            }
+        }
+
         try {
             // If you ever change the way this is serialized think about to change
             // BasicOperationService::extractOperationCallId
-            if (isFlagSet(header, IDS_FLAG)) {
+            if (isIdentifiedDataSerializable(header)) {
                 factoryId = in.readInt();
                 final DataSerializableFactory dsf = factories.get(factoryId);
                 if (dsf == null) {
@@ -152,21 +170,22 @@ final class DataSerializableSerializer implements StreamSerializer<DataSerializa
                     ds = ClassLoaderUtil.newInstance(in.getClassLoader(), className);
                 }
             }
-            if (isFlagSet(header, EE_FLAG)) {
+            if (isVersioned(header)) {
                 in.readByte();
                 in.readByte();
             }
 
             ds.readData(in);
+
+            if (compressedIn != null) {
+                compressedIn.close();
+            }
+
             return ds;
         } catch (Exception e) {
             e = tryClarifyNoSuchMethodException(in.getClassLoader(), className, e);
             throw rethrowReadException(id, factoryId, className, e);
         }
-    }
-
-    public static boolean isFlagSet(byte value, byte flag) {
-        return (value & flag) != 0;
     }
 
     private IOException rethrowReadException(int id, int factoryId, String className, Exception e) throws IOException {
@@ -227,9 +246,21 @@ final class DataSerializableSerializer implements StreamSerializer<DataSerializa
     public void write(ObjectDataOutput out, DataSerializable obj) throws IOException {
         // If you ever change the way this is serialized think about to change
         // BasicOperationService::extractOperationCallId
-        setOutputVersion(out, version);
-        final boolean identified = obj instanceof IdentifiedDataSerializable;
-        out.writeBoolean(identified);
+        out.setVersion(version);
+        boolean identified = obj instanceof IdentifiedDataSerializable;
+        boolean compressed = COMPRESSION != CompressionMethod.NONE && obj instanceof Compressed;
+
+        // Always write header without compression
+        out.writeByte(createHeader(identified, false, compressed));
+
+        CompressionObjectDataOutput compressedOut = null;
+        if (compressed) {
+            compressedOut = createCompressionOutput(out);
+            if (compressedOut != null) {
+                out = compressedOut;
+            }
+        }
+
         if (identified) {
             final IdentifiedDataSerializable ds = (IdentifiedDataSerializable) obj;
             out.writeInt(ds.getFactoryId());
@@ -242,19 +273,15 @@ final class DataSerializableSerializer implements StreamSerializer<DataSerializa
             }
         }
         obj.writeData(out);
+
+        if (compressedOut != null) {
+            compressedOut.close();
+        }
     }
 
     @Override
     public void destroy() {
         factories.clear();
-    }
-
-    private static void setOutputVersion(ObjectDataOutput out, Version version) {
-        ((VersionedObjectDataOutput) out).setVersion(version);
-    }
-
-    private static void setInputVersion(ObjectDataInput in, Version version) {
-        ((VersionedObjectDataInput) in).setVersion(version);
     }
 
     private static String tryGenerateClarifiedExceptionMessage(Class aClass) {
@@ -272,5 +299,4 @@ final class DataSerializableSerializer implements StreamSerializer<DataSerializa
         return String.format("%s classes can't conform to DataSerializable since they can't "
                 + "provide an explicit no-arguments constructor.", classType);
     }
-
 }

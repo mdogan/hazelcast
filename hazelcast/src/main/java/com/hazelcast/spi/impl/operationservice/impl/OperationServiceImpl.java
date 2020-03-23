@@ -31,6 +31,7 @@ import com.hazelcast.internal.serialization.InternalSerializationService;
 import com.hazelcast.internal.util.counters.Counter;
 import com.hazelcast.internal.util.counters.MwCounter;
 import com.hazelcast.logging.ILogger;
+import com.hazelcast.memory.MemorySize;
 import com.hazelcast.spi.impl.NodeEngineImpl;
 import com.hazelcast.spi.impl.PartitionSpecificRunnable;
 import com.hazelcast.spi.impl.executionservice.ExecutionService;
@@ -122,6 +123,15 @@ public final class OperationServiceImpl implements StaticMetricsProvider, LiveOp
     @Probe(name = OPERATION_METRIC_OPERATION_SERVICE_FAILED_BACKUPS, level = MANDATORY)
     final Counter failedBackupsCount = newMwCounter();
 
+    @Probe(name = "MigrationDataSize", level = MANDATORY)
+    final Counter migrationDataSize = newMwCounter();
+
+    @Probe(name = "MigrationSerializationTime", level = MANDATORY)
+    final Counter migrationSerTime = newMwCounter();
+
+    @Probe(name = "MigrationDeserializationTime", level = MANDATORY)
+    final Counter migrationDeserTime = newMwCounter();
+
     final NodeEngineImpl nodeEngine;
     final Node node;
     final ILogger logger;
@@ -164,7 +174,7 @@ public final class OperationServiceImpl implements StaticMetricsProvider, LiveOp
                 nodeEngine, thisAddress, node.getProperties(), invocationRegistry,
                 node.getLogger(InvocationMonitor.class), serializationService, nodeEngine.getServiceManager());
 
-        this.outboundOperationHandler = new OutboundOperationHandler(node, thisAddress, serializationService);
+        this.outboundOperationHandler = new OutboundOperationHandler(node, thisAddress, serializationService, migrationDataSize, migrationSerTime);
 
         this.backupHandler = new OperationBackupHandler(this, outboundOperationHandler);
 
@@ -526,5 +536,7 @@ public final class OperationServiceImpl implements StaticMetricsProvider, LiveOp
 
         operationExecutor.shutdown();
         slowOperationDetector.shutdown();
+
+        logger.severe("MIGRATION DATA SIZE = " + new MemorySize(migrationDataSize.get()).toPrettyString());
     }
 }

@@ -23,6 +23,7 @@ import com.hazelcast.nio.serialization.DataSerializable;
 import com.hazelcast.nio.serialization.DataSerializableFactory;
 import com.hazelcast.nio.serialization.HazelcastSerializationException;
 import com.hazelcast.nio.serialization.IdentifiedDataSerializable;
+import com.hazelcast.nio.serialization.impl.Compressed;
 import com.hazelcast.nio.serialization.impl.VersionedDataSerializableFactory;
 import com.hazelcast.internal.serialization.SerializationService;
 import com.hazelcast.test.HazelcastSerialClassRunner;
@@ -68,6 +69,7 @@ public class DataSerializableSerializationTest extends HazelcastTestSupport {
 
         assertEquals(person.getClass(), deserialized.getClass());
         assertEquals(person.name, deserialized.name);
+        assertEquals(person.person.name, deserialized.person.name);
     }
 
     @Test
@@ -164,25 +166,29 @@ public class DataSerializableSerializationTest extends HazelcastTestSupport {
         }
     }
 
-    private static class IDSPerson implements IdentifiedDataSerializable {
+    private static class IDSPerson implements IdentifiedDataSerializable, Compressed {
 
         private String name;
+        private DSPerson person;
 
         IDSPerson() {
         }
 
         IDSPerson(String name) {
             this.name = name;
+            person = new DSPerson(name);
         }
 
         @Override
         public void writeData(ObjectDataOutput out) throws IOException {
             out.writeUTF(name);
+            out.writeObject(person);
         }
 
         @Override
         public void readData(ObjectDataInput in) throws IOException {
             name = in.readUTF();
+            person = in.readObject();
         }
 
         @Override

@@ -21,6 +21,7 @@ import com.hazelcast.cluster.Address;
 import com.hazelcast.nio.ObjectDataInput;
 import com.hazelcast.nio.ObjectDataOutput;
 import com.hazelcast.nio.serialization.IdentifiedDataSerializable;
+import com.hazelcast.nio.serialization.impl.Compressed;
 import com.hazelcast.spi.impl.operationservice.Operation;
 import com.hazelcast.internal.services.ServiceNamespace;
 import com.hazelcast.spi.impl.operationservice.TargetAware;
@@ -36,7 +37,7 @@ import java.util.Map;
  *
  * @since 3.9
  */
-public class ReplicaFragmentMigrationState implements IdentifiedDataSerializable, TargetAware {
+public class ReplicaFragmentMigrationState implements IdentifiedDataSerializable, TargetAware, Compressed {
 
     private Map<ServiceNamespace, long[]> namespaces;
 

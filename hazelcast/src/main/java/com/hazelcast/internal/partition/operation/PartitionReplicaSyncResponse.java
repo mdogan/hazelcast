@@ -30,6 +30,7 @@ import com.hazelcast.logging.ILogger;
 import com.hazelcast.cluster.Address;
 import com.hazelcast.nio.ObjectDataInput;
 import com.hazelcast.nio.ObjectDataOutput;
+import com.hazelcast.nio.serialization.impl.Compressed;
 import com.hazelcast.spi.impl.NodeEngine;
 import com.hazelcast.internal.services.ServiceNamespace;
 import com.hazelcast.spi.exception.WrongTargetException;
@@ -65,7 +66,7 @@ import static com.hazelcast.spi.impl.operationservice.OperationResponseHandlerFa
 @SuppressFBWarnings("EI_EXPOSE_REP")
 public class PartitionReplicaSyncResponse extends AbstractPartitionOperation
         implements PartitionAwareOperation, BackupOperation, UrgentSystemOperation,
-        AllowedDuringPassiveState, TargetAware {
+        AllowedDuringPassiveState, TargetAware, Compressed {
 
     private Collection<Operation> operations;
     private ServiceNamespace namespace;

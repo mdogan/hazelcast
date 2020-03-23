@@ -241,6 +241,8 @@
                                 <includes>
                                     <include>com.fasterxml.jackson.core:jackson-core</include>
                                     <include>org.snakeyaml:snakeyaml-engine</include>
+                                    <include>com.github.luben:zstd-jni</include>
+                                    <include>org.lz4:lz4-java</include>
                                 </includes>
                             </artifactSet>
                             <relocations>
@@ -382,6 +384,18 @@
             <version>${slf4j.api.version}</version>
             <scope>provided</scope>
             <optional>true</optional>
+        </dependency>
+
+        <dependency>
+            <groupId>org.lz4</groupId>
+            <artifactId>lz4-java</artifactId>
+            <version>1.7.1</version>
+        </dependency>
+
+        <dependency>
+            <groupId>com.github.luben</groupId>
+            <artifactId>zstd-jni</artifactId>
+            <version>1.4.4-7</version>
         </dependency>
 
         <dependency>

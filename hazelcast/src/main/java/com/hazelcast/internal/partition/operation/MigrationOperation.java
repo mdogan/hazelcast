@@ -31,6 +31,7 @@ import com.hazelcast.internal.services.ServiceNamespace;
 import com.hazelcast.logging.ILogger;
 import com.hazelcast.nio.ObjectDataInput;
 import com.hazelcast.nio.ObjectDataOutput;
+import com.hazelcast.nio.serialization.impl.Compressed;
 import com.hazelcast.spi.impl.operationservice.Operation;
 import com.hazelcast.spi.impl.operationservice.OperationAccessor;
 import com.hazelcast.spi.impl.operationservice.OperationResponseHandler;
@@ -52,7 +53,7 @@ import static com.hazelcast.spi.impl.operationexecutor.OperationRunner.runDirect
  * Sent by the partition owner to the migration destination to start the migration process on the destination.
  * Contains the operations which will be executed on the destination node to migrate the data and the replica versions to be set.
  */
-public class MigrationOperation extends BaseMigrationOperation implements TargetAware {
+public class MigrationOperation extends BaseMigrationOperation implements TargetAware, Compressed {
 
     private static final OperationResponseHandler ERROR_RESPONSE_HANDLER = (op, obj) -> {
         throw new HazelcastException("Migration operations can not send response!");

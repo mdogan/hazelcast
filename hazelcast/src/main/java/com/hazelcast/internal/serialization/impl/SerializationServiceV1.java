@@ -88,9 +88,8 @@ import static com.hazelcast.internal.serialization.impl.ConstantSerializers.Stri
 import static com.hazelcast.internal.serialization.impl.ConstantSerializers.TheByteArraySerializer;
 import static com.hazelcast.internal.serialization.impl.ConstantSerializers.UuidSerializer;
 import static com.hazelcast.internal.serialization.impl.ConstantSerializers.SimpleEntrySerializer;
-import static com.hazelcast.internal.serialization.impl.DataSerializableSerializer.EE_FLAG;
-import static com.hazelcast.internal.serialization.impl.DataSerializableSerializer.IDS_FLAG;
-import static com.hazelcast.internal.serialization.impl.DataSerializableSerializer.isFlagSet;
+import static com.hazelcast.internal.serialization.impl.DataSerializableHeader.isIdentifiedDataSerializable;
+import static com.hazelcast.internal.serialization.impl.DataSerializableHeader.isVersioned;
 import static com.hazelcast.internal.serialization.impl.JavaDefaultSerializers.BigDecimalSerializer;
 import static com.hazelcast.internal.serialization.impl.JavaDefaultSerializers.BigIntegerSerializer;
 import static com.hazelcast.internal.serialization.impl.JavaDefaultSerializers.ClassSerializer;
@@ -280,13 +279,13 @@ public class SerializationServiceV1 extends AbstractSerializationService {
     public ObjectDataInput initDataSerializableInputAndSkipTheHeader(Data data) throws IOException {
         ObjectDataInput input = createObjectDataInput(data);
         byte header = input.readByte();
-        if (isFlagSet(header, IDS_FLAG)) {
+        if (isIdentifiedDataSerializable(header)) {
             skipBytesSafely(input, FACTORY_AND_CLASS_ID_BYTE_LENGTH);
         } else {
             input.readUTF();
         }
 
-        if (isFlagSet(header, EE_FLAG)) {
+        if (isVersioned(header)) {
             skipBytesSafely(input, EE_BYTE_LENGTH);
         }
         return input;

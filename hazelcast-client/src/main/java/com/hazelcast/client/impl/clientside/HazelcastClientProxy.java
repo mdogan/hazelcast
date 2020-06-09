@@ -62,6 +62,7 @@ import com.hazelcast.transaction.TransactionOptions;
 import com.hazelcast.transaction.TransactionalTask;
 
 import java.util.Collection;
+import java.util.Iterator;
 import java.util.concurrent.ConcurrentMap;
 
 /**
@@ -235,7 +236,16 @@ public class HazelcastClientProxy implements HazelcastInstance, SerializationSer
 
     @Override
     public Collection<DistributedObject> getDistributedObjects() {
-        return getClient().getDistributedObjects();
+        String prefix = String.valueOf(client.getPlaygroundId());
+        Collection<DistributedObject> objects = getClient().getDistributedObjects();
+        Iterator<DistributedObject> iter = objects.iterator();
+        while (iter.hasNext()) {
+            DistributedObject object = iter.next();
+            if (!object.getName().startsWith(prefix)) {
+                iter.remove();
+            }
+        }
+        return objects;
     }
 
     @Override

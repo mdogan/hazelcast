@@ -18,6 +18,7 @@ package com.hazelcast.client;
 
 import com.hazelcast.client.config.ClientConfig;
 import com.hazelcast.client.config.ClientFailoverConfig;
+import com.hazelcast.client.config.XmlClientConfigBuilder;
 import com.hazelcast.client.connection.AddressProvider;
 import com.hazelcast.client.impl.clientside.ClientConnectionManagerFactory;
 import com.hazelcast.client.impl.clientside.DefaultClientConnectionManagerFactory;
@@ -75,8 +76,7 @@ public final class HazelcastClient {
 
     private static final HazelcastClientProxy singletonClient;
     static {
-        // TODO: define client config
-        ClientConfig clientConfig = new ClientConfig();
+        ClientConfig clientConfig = new XmlClientConfigBuilder().build();
         InstanceFuture<HazelcastClientProxy> future = new InstanceFuture<>();
         HazelcastClient.constructHazelcastClient(null, clientConfig, null, "singleton-client", future);
         singletonClient = future.get();

@@ -35,15 +35,12 @@ import com.hazelcast.util.ExceptionUtil;
 
 import java.util.Collection;
 import java.util.Collections;
-import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static com.hazelcast.client.impl.clientside.FailoverClientConfigSupport.resolveClientConfig;
-import static com.hazelcast.client.impl.clientside.FailoverClientConfigSupport.resolveClientFailoverConfig;
 import static com.hazelcast.util.Preconditions.checkHasText;
-import static com.hazelcast.util.SetUtil.createHashSet;
 
 /**
  * The HazelcastClient is comparable to the {@link com.hazelcast.core.Hazelcast} class and provides the ability
@@ -74,6 +71,15 @@ public final class HazelcastClient {
 
     static {
         OutOfMemoryErrorDispatcher.setClientHandler(new ClientOutOfMemoryHandler());
+    }
+
+    private static final HazelcastClientProxy singletonClient;
+    static {
+        // TODO: define client config
+        ClientConfig clientConfig = new ClientConfig();
+        InstanceFuture<HazelcastClientProxy> future = new InstanceFuture<>();
+        HazelcastClient.constructHazelcastClient(null, clientConfig, null, "singleton-client", future);
+        singletonClient = future.get();
     }
 
     private HazelcastClient() {
@@ -118,7 +124,8 @@ public final class HazelcastClient {
      * @see #getHazelcastClientByName(String) (String)
      */
     public static HazelcastInstance newHazelcastClient() {
-        return newHazelcastClientInternal(null, resolveClientConfig(null), null);
+//        return newHazelcastClientInternal(null, resolveClientConfig(null), null);
+        return singletonClient;
     }
 
     /**
@@ -135,7 +142,8 @@ public final class HazelcastClient {
      * @see #getHazelcastClientByName(String) (String)
      */
     public static HazelcastInstance newHazelcastClient(ClientConfig config) {
-        return newHazelcastClientInternal(null, resolveClientConfig(config), null);
+//        return newHazelcastClientInternal(null, resolveClientConfig(config), null);
+        return singletonClient;
     }
 
     /**
@@ -160,7 +168,8 @@ public final class HazelcastClient {
      * @throws InvalidConfigurationException if the loaded failover configuration is not valid
      */
     public static HazelcastInstance newHazelcastFailoverClient() {
-        return newHazelcastClientInternal(null, null, resolveClientFailoverConfig());
+//        return newHazelcastClientInternal(null, null, resolveClientFailoverConfig());
+        return singletonClient;
     }
 
     /**
@@ -187,7 +196,8 @@ public final class HazelcastClient {
      * @throws InvalidConfigurationException if the provided or the loaded failover configuration is not valid
      */
     public static HazelcastInstance newHazelcastFailoverClient(ClientFailoverConfig clientFailoverConfig) {
-        return newHazelcastClientInternal(null, null, resolveClientFailoverConfig(clientFailoverConfig));
+//        return newHazelcastClientInternal(null, null, resolveClientFailoverConfig(clientFailoverConfig));
+        return singletonClient;
     }
 
     /**
@@ -197,16 +207,17 @@ public final class HazelcastClient {
      * @return HazelcastInstance
      */
     public static HazelcastInstance getHazelcastClientByName(String instanceName) {
-        InstanceFuture<HazelcastClientProxy> future = CLIENTS.get(instanceName);
-        if (future == null) {
-            return null;
-        }
-
-        try {
-            return future.get();
-        } catch (IllegalStateException t) {
-            return null;
-        }
+//        InstanceFuture<HazelcastClientProxy> future = CLIENTS.get(instanceName);
+//        if (future == null) {
+//            return null;
+//        }
+//
+//        try {
+//            return future.get();
+//        } catch (IllegalStateException t) {
+//            return null;
+//        }
+        return singletonClient;
     }
 
     /**
@@ -244,7 +255,8 @@ public final class HazelcastClient {
      * @see #getHazelcastClientByName(String) (String)
      */
     public static HazelcastInstance getOrCreateHazelcastClient() {
-        return getOrCreateClientInternal(null);
+//        return getOrCreateClientInternal(null);
+        return singletonClient;
     }
 
     /**
@@ -285,7 +297,8 @@ public final class HazelcastClient {
      * @see #getHazelcastClientByName(String) (String)
      */
     public static HazelcastInstance getOrCreateHazelcastClient(ClientConfig config) {
-        return getOrCreateClientInternal(config);
+//        return getOrCreateClientInternal(config);
+        return singletonClient;
     }
 
     /**
@@ -301,11 +314,12 @@ public final class HazelcastClient {
      * @return the collection of client HazelcastInstances
      */
     public static Collection<HazelcastInstance> getAllHazelcastClients() {
-        Set<HazelcastInstance> result = createHashSet(CLIENTS.size());
-        for (InstanceFuture<HazelcastClientProxy> f : CLIENTS.values()) {
-            result.add(f.get());
-        }
-        return Collections.unmodifiableCollection(result);
+//        Set<HazelcastInstance> result = createHashSet(CLIENTS.size());
+//        for (InstanceFuture<HazelcastClientProxy> f : CLIENTS.values()) {
+//            result.add(f.get());
+//        }
+//        return Collections.unmodifiableCollection(result);
+        return Collections.singleton(singletonClient);
     }
 
     /**
@@ -319,21 +333,22 @@ public final class HazelcastClient {
      * @see #getAllHazelcastClients()
      */
     public static void shutdownAll() {
-        for (InstanceFuture<HazelcastClientProxy> future : CLIENTS.values()) {
-            try {
-                HazelcastClientProxy proxy = future.get();
-                HazelcastClientInstanceImpl client = proxy.client;
-                if (client == null) {
-                    continue;
-                }
-                proxy.client = null;
-                client.shutdown();
-            } catch (Throwable ignored) {
-                EmptyStatement.ignore(ignored);
-            }
-        }
-        OutOfMemoryErrorDispatcher.clearClients();
-        CLIENTS.clear();
+//        for (InstanceFuture<HazelcastClientProxy> future : CLIENTS.values()) {
+//            try {
+//                HazelcastClientProxy proxy = future.get();
+//                HazelcastClientInstanceImpl client = proxy.client;
+//                if (client == null) {
+//                    continue;
+//                }
+//                proxy.client = null;
+//                client.shutdown();
+//            } catch (Throwable ignored) {
+//                EmptyStatement.ignore(ignored);
+//            }
+//        }
+//        OutOfMemoryErrorDispatcher.clearClients();
+//        CLIENTS.clear();
+        singletonClient.shutdown();
     }
 
     /**

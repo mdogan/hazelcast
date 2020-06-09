@@ -36,9 +36,15 @@ import static com.hazelcast.util.Preconditions.checkNotNull;
 public class ClientICacheManager implements ICacheManager {
 
     private final HazelcastInstance instance;
+    private final HazelcastClientInstanceImpl client;
 
     ClientICacheManager(HazelcastInstance instance) {
         this.instance = instance;
+        if (instance instanceof HazelcastClientInstanceImpl) {
+            client = (HazelcastClientInstanceImpl) instance;
+        } else {
+            client = null;
+        }
     }
 
     @Override
@@ -50,7 +56,7 @@ public class ClientICacheManager implements ICacheManager {
     public <K, V> ICache<K, V> getCacheByFullName(String fullName) {
         checkNotNull(fullName, "Retrieving a cache instance with a null name is not allowed!");
         try {
-            return instance.getDistributedObject(ICacheService.SERVICE_NAME, fullName);
+            return instance.getDistributedObject(ICacheService.SERVICE_NAME, client.dataStructureName(fullName));
         } catch (ClientServiceNotFoundException e) {
             // Cache support is not available at client side
             throw new IllegalStateException("At client, " + ICacheService.CACHE_SUPPORT_NOT_AVAILABLE_ERROR_MESSAGE);

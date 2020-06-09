@@ -88,52 +88,52 @@ public class HazelcastClientProxy implements HazelcastInstance, SerializationSer
 
     @Override
     public <E> Ringbuffer<E> getRingbuffer(String name) {
-        return getClient().getRingbuffer(name);
+        return getClient().getRingbuffer(client.dataStructureName(name));
     }
 
     @Override
     public <E> IQueue<E> getQueue(String name) {
-        return getClient().getQueue(name);
+        return getClient().getQueue(client.dataStructureName(name));
     }
 
     @Override
     public <E> ITopic<E> getTopic(String name) {
-        return getClient().getTopic(name);
+        return getClient().getTopic(client.dataStructureName(name));
     }
 
     @Override
     public <E> ITopic<E> getReliableTopic(String name) {
-        return getClient().getReliableTopic(name);
+        return getClient().getReliableTopic(client.dataStructureName(name));
     }
 
     @Override
     public <E> ISet<E> getSet(String name) {
-        return getClient().getSet(name);
+        return getClient().getSet(client.dataStructureName(name));
     }
 
     @Override
     public <E> IList<E> getList(String name) {
-        return getClient().getList(name);
+        return getClient().getList(client.dataStructureName(name));
     }
 
     @Override
     public <K, V> IMap<K, V> getMap(String name) {
-        return getClient().getMap(name);
+        return getClient().getMap(client.dataStructureName(name));
     }
 
     @Override
     public <K, V> MultiMap<K, V> getMultiMap(String name) {
-        return getClient().getMultiMap(name);
+        return getClient().getMultiMap(client.dataStructureName(name));
     }
 
     @Override
     public <K, V> ReplicatedMap<K, V> getReplicatedMap(String name) {
-        return getClient().getReplicatedMap(name);
+        return getClient().getReplicatedMap(client.dataStructureName(client.dataStructureName(name)));
     }
 
     @Override
     public JobTracker getJobTracker(String name) {
-        return getClient().getJobTracker(name);
+        return getClient().getJobTracker(client.dataStructureName(name));
     }
 
     @Override
@@ -158,12 +158,12 @@ public class HazelcastClientProxy implements HazelcastInstance, SerializationSer
 
     @Override
     public IExecutorService getExecutorService(String name) {
-        return getClient().getExecutorService(name);
+        return getClient().getExecutorService(client.dataStructureName(name));
     }
 
     @Override
     public DurableExecutorService getDurableExecutorService(String name) {
-        return getClient().getDurableExecutorService(name);
+        return getClient().getDurableExecutorService(client.dataStructureName(name));
     }
 
     @Override
@@ -190,47 +190,47 @@ public class HazelcastClientProxy implements HazelcastInstance, SerializationSer
 
     @Override
     public IdGenerator getIdGenerator(String name) {
-        return getClient().getIdGenerator(name);
+        return getClient().getIdGenerator(client.dataStructureName(name));
     }
 
     @Override
     public FlakeIdGenerator getFlakeIdGenerator(String name) {
-        return getClient().getFlakeIdGenerator(name);
+        return getClient().getFlakeIdGenerator(client.dataStructureName(name));
     }
 
     @Override
     public IAtomicLong getAtomicLong(String name) {
-        return getClient().getAtomicLong(name);
+        return getClient().getAtomicLong(client.dataStructureName(name));
     }
 
     @Override
     public <E> IAtomicReference<E> getAtomicReference(String name) {
-        return getClient().getAtomicReference(name);
+        return getClient().getAtomicReference(client.dataStructureName(name));
     }
 
     @Override
     public ICountDownLatch getCountDownLatch(String name) {
-        return getClient().getCountDownLatch(name);
+        return getClient().getCountDownLatch(client.dataStructureName(name));
     }
 
     @Override
     public ISemaphore getSemaphore(String name) {
-        return getClient().getSemaphore(name);
+        return getClient().getSemaphore(client.dataStructureName(name));
     }
 
     @Override
     public CardinalityEstimator getCardinalityEstimator(String name) {
-        return getClient().getCardinalityEstimator(name);
+        return getClient().getCardinalityEstimator(client.dataStructureName(client.dataStructureName(name)));
     }
 
     @Override
     public PNCounter getPNCounter(String name) {
-        return getClient().getPNCounter(name);
+        return getClient().getPNCounter(client.dataStructureName(name));
     }
 
     @Override
     public IScheduledExecutorService getScheduledExecutorService(String name) {
-        return getClient().getScheduledExecutorService(name);
+        return getClient().getScheduledExecutorService(client.dataStructureName(name));
     }
 
     @Override
@@ -276,7 +276,7 @@ public class HazelcastClientProxy implements HazelcastInstance, SerializationSer
 
     @Override
     public <T extends DistributedObject> T getDistributedObject(String serviceName, String name) {
-        return getClient().getDistributedObject(serviceName, name);
+        return getClient().getDistributedObject(serviceName, client.dataStructureName(name));
     }
 
     @Override

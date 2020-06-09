@@ -171,6 +171,8 @@ public class HazelcastClientInstanceImpl implements HazelcastInstance, Serializa
     private static final AtomicInteger CLIENT_ID = new AtomicInteger();
     private static final short PROTOCOL_VERSION = ClientMessage.VERSION;
 
+    private volatile long playgroundId;
+
     private final HazelcastProperties properties;
     private final int id = CLIENT_ID.getAndIncrement();
     private final String instanceName;
@@ -422,6 +424,8 @@ public class HazelcastClientInstanceImpl implements HazelcastInstance, Serializa
             statistics.start();
             clientExtension.afterStart(this);
             cpSubsystem.init(clientContext);
+
+            playgroundId = getFlakeIdGenerator("hz:client:playground").newId();
         } catch (Throwable e) {
             try {
                 lifecycleService.terminate();
@@ -854,5 +858,13 @@ public class HazelcastClientInstanceImpl implements HazelcastInstance, Serializa
 
     public ClientQueryCacheContext getQueryCacheContext() {
         return queryCacheContext;
+    }
+
+    public long getPlaygroundId() {
+        return playgroundId;
+    }
+
+    public String dataStructureName(String name) {
+        return getPlaygroundId() + ":" + name;
     }
 }

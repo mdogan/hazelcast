@@ -74,12 +74,18 @@ public final class HazelcastClient {
         OutOfMemoryErrorDispatcher.setClientHandler(new ClientOutOfMemoryHandler());
     }
 
-    private static final HazelcastClientProxy singletonClient;
-    static {
-        ClientConfig clientConfig = new XmlClientConfigBuilder().build();
-        InstanceFuture<HazelcastClientProxy> future = new InstanceFuture<>();
-        HazelcastClient.constructHazelcastClient(null, clientConfig, null, "singleton-client", future);
-        singletonClient = future.get();
+    private static volatile HazelcastClientProxy singletonClient;
+
+    private static HazelcastClientProxy startSingletonInstance() {
+        synchronized (CLIENTS) {
+            if (singletonClient == null) {
+                ClientConfig clientConfig = new XmlClientConfigBuilder().build();
+                InstanceFuture<HazelcastClientProxy> future = new InstanceFuture<>();
+                HazelcastClient.constructHazelcastClient(null, clientConfig, null, "singleton-client", future);
+                singletonClient = future.get();
+            }
+            return singletonClient;
+        }
     }
 
     private HazelcastClient() {
@@ -125,7 +131,7 @@ public final class HazelcastClient {
      */
     public static HazelcastInstance newHazelcastClient() {
 //        return newHazelcastClientInternal(null, resolveClientConfig(null), null);
-        return singletonClient;
+        return startSingletonInstance();
     }
 
     /**
@@ -143,7 +149,7 @@ public final class HazelcastClient {
      */
     public static HazelcastInstance newHazelcastClient(ClientConfig config) {
 //        return newHazelcastClientInternal(null, resolveClientConfig(config), null);
-        return singletonClient;
+        return startSingletonInstance();
     }
 
     /**
@@ -169,7 +175,7 @@ public final class HazelcastClient {
      */
     public static HazelcastInstance newHazelcastFailoverClient() {
 //        return newHazelcastClientInternal(null, null, resolveClientFailoverConfig());
-        return singletonClient;
+        return startSingletonInstance();
     }
 
     /**
@@ -197,7 +203,7 @@ public final class HazelcastClient {
      */
     public static HazelcastInstance newHazelcastFailoverClient(ClientFailoverConfig clientFailoverConfig) {
 //        return newHazelcastClientInternal(null, null, resolveClientFailoverConfig(clientFailoverConfig));
-        return singletonClient;
+        return startSingletonInstance();
     }
 
     /**
@@ -217,7 +223,7 @@ public final class HazelcastClient {
 //        } catch (IllegalStateException t) {
 //            return null;
 //        }
-        return singletonClient;
+        return startSingletonInstance();
     }
 
     /**
@@ -256,7 +262,7 @@ public final class HazelcastClient {
      */
     public static HazelcastInstance getOrCreateHazelcastClient() {
 //        return getOrCreateClientInternal(null);
-        return singletonClient;
+        return startSingletonInstance();
     }
 
     /**
@@ -298,7 +304,7 @@ public final class HazelcastClient {
      */
     public static HazelcastInstance getOrCreateHazelcastClient(ClientConfig config) {
 //        return getOrCreateClientInternal(config);
-        return singletonClient;
+        return startSingletonInstance();
     }
 
     /**
@@ -319,6 +325,9 @@ public final class HazelcastClient {
 //            result.add(f.get());
 //        }
 //        return Collections.unmodifiableCollection(result);
+        if (singletonClient == null) {
+            return Collections.emptyList();
+        }
         return Collections.singleton(singletonClient);
     }
 
@@ -348,7 +357,10 @@ public final class HazelcastClient {
 //        }
 //        OutOfMemoryErrorDispatcher.clearClients();
 //        CLIENTS.clear();
-        singletonClient.shutdown();
+        HazelcastClientProxy client = singletonClient;
+        if (client != null) {
+            client.shutdown();
+        }
     }
 
     /**

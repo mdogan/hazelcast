@@ -111,6 +111,7 @@ public class MigrationManager {
 
     private static final int MIGRATION_PAUSE_DURATION_SECONDS_ON_MIGRATION_FAILURE = 3;
     private static final int PUBLISH_COMPLETED_MIGRATIONS_BATCH_SIZE = 10;
+    private static final int PUBLISH_COMPLETED_MIGRATIONS_DELAY_MS = 500;
 
     private static final int COMMIT_SUCCESS = 1;
     private static final int COMMIT_RETRY = 0;
@@ -127,6 +128,7 @@ public class MigrationManager {
     private final AtomicBoolean migrationTasksAllowed = new AtomicBoolean(true);
     private final long partitionMigrationTimeout;
     private final CoalescingDelayedTrigger delayedResumeMigrationTrigger;
+    private final CoalescingDelayedTrigger publishCompletedMigrationsTrigger;
     private final Set<Member> shutdownRequestedMembers = new HashSet<>();
     // updates will be done under lock, but reads will be multithreaded.
     private final ConcurrentMap<Integer, MigrationInfo> activeMigrations = new ConcurrentHashMap<>();
@@ -162,8 +164,10 @@ public class MigrationManager {
         migrationThread = new MigrationThread(this, hzName, migrationThreadLogger, migrationQueue);
         long migrationPauseDelayMs = TimeUnit.SECONDS.toMillis(MIGRATION_PAUSE_DURATION_SECONDS_ON_MIGRATION_FAILURE);
         ExecutionService executionService = nodeEngine.getExecutionService();
-        delayedResumeMigrationTrigger = new CoalescingDelayedTrigger(
-                executionService, migrationPauseDelayMs, 2 * migrationPauseDelayMs, this::resumeMigration);
+        delayedResumeMigrationTrigger = new CoalescingDelayedTrigger(executionService, migrationPauseDelayMs,
+                2 * migrationPauseDelayMs, this::resumeMigration);
+        publishCompletedMigrationsTrigger = new CoalescingDelayedTrigger(executionService, PUBLISH_COMPLETED_MIGRATIONS_DELAY_MS,
+                10 * PUBLISH_COMPLETED_MIGRATIONS_DELAY_MS, this::publishCompletedMigrations);
         this.memberHeartbeatTimeoutMillis = properties.getMillis(ClusterProperty.MAX_NO_HEARTBEAT_SECONDS);
         nodeEngine.getMetricsRegistry().registerStaticMetrics(stats, PARTITIONS_PREFIX);
     }
@@ -1537,7 +1541,7 @@ public class MigrationManager {
                     node.getNodeExtension().onPartitionStateChange();
 
                     if (completedMigrations.size() >= PUBLISH_COMPLETED_MIGRATIONS_BATCH_SIZE) {
-                        publishCompletedMigrations();
+                        publishCompletedMigrationsTrigger.executeWithDelay();
                     }
                 } finally {
                     partitionServiceLock.unlock();
@@ -1803,7 +1807,7 @@ public class MigrationManager {
                 node.getNodeExtension().onPartitionStateChange();
 
                 if (completedMigrations.size() >= PUBLISH_COMPLETED_MIGRATIONS_BATCH_SIZE) {
-                    publishCompletedMigrations();
+                    publishCompletedMigrationsTrigger.executeWithDelay();
                 }
             } finally {
                 partitionServiceLock.unlock();

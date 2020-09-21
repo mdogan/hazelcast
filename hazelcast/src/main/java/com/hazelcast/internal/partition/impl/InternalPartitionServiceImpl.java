@@ -1442,7 +1442,7 @@ public class InternalPartitionServiceImpl implements InternalPartitionService,
             activeMigration.setStatus(migration.getStatus());
             migrationManager.finalizeMigration(migration);
             if (logger.isFineEnabled()) {
-                logger.fine("Committed " + migration + " on destination with partition state version: " + finalVersion);
+                logger.fine("Committed " + migration + " on destination with partition version: " + finalVersion);
             }
             return true;
         } finally {
@@ -1504,8 +1504,8 @@ public class InternalPartitionServiceImpl implements InternalPartitionService,
 
             latestPartitions = partitionStateManager.getPartitionsCopy(true);
 
-            Collection<MigrationInfo> allCompletedMigrations = new HashSet<>();
-            Collection<MigrationInfo> allActiveMigrations = new HashSet<>();
+            Set<MigrationInfo> allCompletedMigrations = new HashSet<>();
+            Set<MigrationInfo> allActiveMigrations = new HashSet<>();
 
             collectAndProcessResults(allCompletedMigrations, allActiveMigrations);
 
@@ -1526,9 +1526,7 @@ public class InternalPartitionServiceImpl implements InternalPartitionService,
         }
 
         /** Collects all completed and active migrations and sets the partition state to the latest version. */
-        private void collectAndProcessResults(Collection<MigrationInfo> allCompletedMigrations,
-                Collection<MigrationInfo> allActiveMigrations) {
-
+        private void collectAndProcessResults(Set<MigrationInfo> allCompletedMigrations, Set<MigrationInfo> allActiveMigrations) {
             Collection<Member> members = node.clusterService.getMembers(NON_LOCAL_MEMBER_SELECTOR);
             Map<Member, Future<PartitionRuntimeState>> futures = new HashMap<>();
             for (Member member : members) {
@@ -1627,9 +1625,7 @@ public class InternalPartitionServiceImpl implements InternalPartitionService,
          * @param allCompletedMigrations received completed migrations from other nodes
          * @param allActiveMigrations    received active migrations from other nodes
          */
-        private void processNewState(Collection<MigrationInfo> allCompletedMigrations,
-                Collection<MigrationInfo> allActiveMigrations) {
-
+        private void processNewState(Set<MigrationInfo> allCompletedMigrations, Set<MigrationInfo> allActiveMigrations) {
             lock.lock();
             try {
                 processMigrations(allCompletedMigrations, allActiveMigrations);
@@ -1652,9 +1648,7 @@ public class InternalPartitionServiceImpl implements InternalPartitionService,
             }
         }
 
-        private void processNewStateLegacy(Collection<MigrationInfo> allCompletedMigrations,
-                Collection<MigrationInfo> allActiveMigrations) {
-
+        private void processNewStateLegacy(Set<MigrationInfo> allCompletedMigrations, Set<MigrationInfo> allActiveMigrations) {
             lock.lock();
             try {
                 processMigrations(allCompletedMigrations, allActiveMigrations);
@@ -1692,10 +1686,11 @@ public class InternalPartitionServiceImpl implements InternalPartitionService,
         }
 
         /** Moves all migrations to completed (including local) and marks active migrations as {@link MigrationStatus#FAILED}. */
-        private void processMigrations(Collection<MigrationInfo> allCompletedMigrations,
-                                       Collection<MigrationInfo> allActiveMigrations) {
+        private void processMigrations(Set<MigrationInfo> allCompletedMigrations, Set<MigrationInfo> allActiveMigrations) {
             allCompletedMigrations.addAll(migrationManager.getCompletedMigrationsCopy());
             allActiveMigrations.addAll(migrationManager.getActiveMigrations());
+
+            logger.warning("------> " + allActiveMigrations);
 
             for (MigrationInfo migration : allActiveMigrations) {
                 if (allCompletedMigrations.add(migration)) {

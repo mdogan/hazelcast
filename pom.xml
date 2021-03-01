@@ -108,7 +108,7 @@
         <sonar.language>java</sonar.language>
         <sonar.verbose>true</sonar.verbose>
 
-        <checkstyle.version>8.29</checkstyle.version>
+        <checkstyle.version>8.41</checkstyle.version>
 
         <maven.test.redirectTestOutputToFile>true</maven.test.redirectTestOutputToFile>
 
